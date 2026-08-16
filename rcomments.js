@@ -2,7 +2,7 @@
  * RMEDIA Comments for Lampa
  * Безопасный просмотр комментариев HDRezka без обязательного английского названия.
  *
- * Version: 1.0.2
+ * Version: 1.0.3
  * License: MIT
  */
 (function () {
@@ -13,7 +13,7 @@
 
   var ID = 'rmediahub_comments';
   var NAME = 'RMEDIA Comments';
-  var VERSION = '1.0.2';
+  var VERSION = '1.0.3';
   var BUTTON_CLASS = 'button--rmedia-comments';
   var DEFAULT_HOST = 'https://rezka.ag';
   var DEFAULT_PROXY = 'https://worker-patient-dream-26d8.bdvburik.workers.dev:8443/';
@@ -509,31 +509,49 @@
   }
 
   function installButton(event) {
-    setTimeout(function () {
+    function inject() {
       var movie = event && event.data && event.data.movie;
       var method = event && event.object && event.object.method;
-      var container = document.querySelector('.full-start-new__buttons, .full-start__buttons');
+      var root = event && event.body && event.body[0] ? event.body[0] : document;
+      var container = root.querySelector('.full-start-new__buttons, .full-start__buttons');
       if (!movie || !container) return;
 
-      Array.prototype.slice.call(document.querySelectorAll('.button--comment, .' + BUTTON_CLASS)).forEach(function (item) {
+      Array.prototype.slice.call(root.querySelectorAll('.button--comment')).forEach(function (item) {
         if (item.parentNode) item.parentNode.removeChild(item);
       });
 
-      var holder = document.createElement('div');
-      holder.innerHTML = buttonHtml();
-      var button = holder.firstChild;
-      container.appendChild(button);
+      var button = container.querySelector('.' + BUTTON_CLASS);
+      var created = false;
+      if (!button) {
+        var holder = document.createElement('div');
+        holder.innerHTML = buttonHtml();
+        button = holder.firstChild;
+        container.appendChild(button);
+        created = true;
+      }
 
       if (window.$) {
-        window.$(button).on('hover:enter.rmediaComments', function () {
+        window.$(button).off('.rmediaComments').on('hover:enter.rmediaComments click.rmediaComments', function () {
           loadForMovie(movie, method);
         });
       } else {
+        button.onclick = null;
         button.addEventListener('click', function () {
           loadForMovie(movie, method);
         });
       }
-    }, 120);
+
+      // На ТВ контроллер карточки собирает список .selector раньше, чем
+      // сторонние плагины успевают добавить свою кнопку.
+      try {
+        var enabled = Lampa.Controller.enabled();
+        if (created && enabled && enabled.name === 'full_start') Lampa.Controller.collectionAppend(button);
+      } catch (error) {}
+    }
+
+    [120, 500, 1200, 2500].forEach(function (delay) {
+      setTimeout(inject, delay);
+    });
   }
 
   function registerSettings() {
