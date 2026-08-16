@@ -1,13 +1,13 @@
 /**
  * RMEDIA Tune for Lampa
  * Лёгкий тюнинг главной страницы без тяжёлой полноэкранной карточки.
- * Version: 1.0.5
+ * Version: 1.0.6
  * License: MIT
  */
 (function () {
     'use strict';
 
-    var VERSION = '1.0.5';
+    var VERSION = '1.0.6';
     if (window.rtune_plugin_version === VERSION) return;
     window.rtune_plugin_version = VERSION;
     window.rtune_plugin_ready = true;
@@ -24,9 +24,9 @@
     var services = [
         { id: 'netflix', name: 'NETFLIX', provider: 8, color: '#e50914' },
         { id: 'disney', name: 'Disney+', provider: 337, color: '#1f80e0' },
-        { id: 'hbo', name: 'HBO', provider: 384, color: '#111111' },
+        { id: 'hbo', name: 'HBO', provider: '1899|118', color: '#111111' },
         { id: 'apple', name: 'Apple TV+', provider: 350, color: '#111111' },
-        { id: 'prime', name: 'prime video', provider: 119, color: '#00a8e1' },
+        { id: 'prime', name: 'prime video', provider: '9|119', color: '#00a8e1' },
         { id: 'hulu', name: 'hulu', provider: 15, color: '#1ce783' },
         { id: 'paramount', name: 'Paramount+', provider: 531, color: '#1487ff' }
     ];
@@ -95,6 +95,31 @@
         json.source = 'tmdb';
         json.results = usableCards(json.results, mediaType);
         return json;
+    }
+
+    function installCatalogFilters() {
+        if (window.rtune_catalog_filters_ready) return;
+        if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources.tmdb || !Lampa.Api.sources.tmdb.list) return;
+
+        var source = Lampa.Api.sources.tmdb;
+        var originalList = source.list;
+
+        source.list = function (params, success, error) {
+            return originalList.call(source, params, function (json) {
+                var url = String(params && params.url || '');
+                var title = String(params && params.title || '');
+                var isRussianFeed = title.indexOf('Новинки русской ленты') >= 0 ||
+                    (url.indexOf('discover/movie') === 0 && url.indexOf('with_original_language=ru') >= 0);
+
+                if (isRussianFeed && json && json.results) {
+                    json.results = usableCards(json.results, 'movie');
+                }
+
+                success(json);
+            }, error);
+        };
+
+        window.rtune_catalog_filters_ready = true;
     }
 
     function openMovie(movie) {
@@ -168,7 +193,7 @@
             className: 'rtune-service rtune-service--' + service.id,
             html: '<div class="rtune-service__logo" style="color:' + service.color + '">' + service.name + '</div>',
             enter: function () {
-                openCategory(service.name, 'discover/movie?with_watch_providers=' + service.provider + '&watch_region=US&sort_by=popularity.desc');
+                openCategory(service.name, 'discover/movie?with_watch_providers=' + encodeURIComponent(service.provider) + '&watch_region=US&with_watch_monetization_types=flatrate&vote_count.gte=25&sort_by=popularity.desc');
             }
         });
     }
@@ -310,7 +335,7 @@
         addRow({
             name: 'rtune_streamings',
             title: '📺 Стриминги',
-            index: 4,
+            index: 2,
             screen: ['main'],
             call: function () {
                 if (!setting('rtune_home_streamings', true)) return;
@@ -327,7 +352,7 @@
         addRow({
             name: 'rtune_moods',
             title: '🎭 Кино по настроению',
-            index: 5,
+            index: 3,
             screen: ['main'],
             call: function () {
                 if (!setting('rtune_home_moods', true)) return;
@@ -510,10 +535,10 @@
         [
             ['rtune_home_releases', 'Новинки фильмов', 'Большие баннеры только на главной', true],
             ['rtune_home_tv', 'Новинки сериалов', 'Свежие сериалы TMDB', true],
-            ['rtune_home_ru', 'Новинки русской ленты', 'Свежие фильмы на русском языке', true],
-            ['rtune_home_ua', 'Новинки украинской ленты', 'Украинские фильмы за последние два года', true],
             ['rtune_home_streamings', 'Стриминги', 'Netflix, HBO, Apple TV+ и другие', true],
-            ['rtune_home_moods', 'Кино по настроению', 'Быстрые подборки по жанрам', true]
+            ['rtune_home_moods', 'Кино по настроению', 'Быстрые подборки по жанрам', true],
+            ['rtune_home_ru', 'Новинки русской ленты', 'Свежие фильмы на русском языке', true],
+            ['rtune_home_ua', 'Новинки украинской ленты', 'Украинские фильмы за последние четыре года', true]
         ].forEach(function (item) {
             Lampa.SettingsApi.addParam({ component: COMPONENT, param: { name: item[0], type: 'trigger', default: item[3] }, field: { name: item[1], description: item[2] } });
         });
@@ -540,6 +565,7 @@
 
     function start() {
         addStyles();
+        installCatalogFilters();
         addRows();
         setupSettings();
         observeCards();
