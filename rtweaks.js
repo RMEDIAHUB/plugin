@@ -2,7 +2,7 @@
  * RMEDIA Tweaks for Lampa
  * Небольшие улучшения интерфейса без рекламы, аналитики и внешних запросов.
  *
- * Version: 1.0.2
+ * Version: 1.1.0
  * License: MIT
  */
 (function () {
@@ -13,7 +13,7 @@
 
   var ID = 'rmediahub_tweaks';
   var NAME = 'RMEDIA Tweaks';
-  var VERSION = '1.0.2';
+  var VERSION = '1.1.0';
   var observer = null;
   var refreshTimer = null;
   var clockTimer = null;
@@ -97,43 +97,51 @@
   function applyButtonStyles() {
     var css = [
       '.full-start__button.button--play{',
-      'background:#111!important;border:.11em solid #ff9f0a!important;color:#fff!important}',
+      'background:#111!important;border:.11em solid transparent!important;color:#fff!important}',
       '.full-start__button.button--play.focus{',
       'background:#111!important;color:#fff!important;border-color:#ffb340!important;',
       'box-shadow:0 0 .42em rgba(255,159,10,.7)!important}',
       '.full-start__button.button--play svg,.full-start__button.button--play span{color:#fff!important}',
       '.full-start__button.view--torrent,.full-start__button[class*="torrent"]{',
-      'background:rgba(48,209,88,.22)!important;border:.11em solid #30d158!important}',
+      'background:rgba(48,209,88,.22)!important;border:.11em solid transparent!important}',
       '.full-start__button.view--trailer{',
-      'background:rgba(255,69,58,.22)!important;border:.11em solid #ff453a!important}',
+      'background:rgba(255,69,58,.22)!important;border:.11em solid transparent!important}',
       '.full-start__button.view--online,.full-start__button.view--onlines_v1,',
       '.full-start__button.view--streamv1,.full-start__button.open--menu{',
-      'background:rgba(10,132,255,.22)!important;border:.11em solid #0a84ff!important}',
+      'background:rgba(10,132,255,.22)!important;border:.11em solid transparent!important}',
       '.full-start__button.view--bazon,.full-start__button.view--filmixpva{',
-      'background:rgba(191,90,242,.22)!important;border:.11em solid #bf5af2!important}',
+      'background:rgba(191,90,242,.22)!important;border:.11em solid transparent!important}',
       '.full-start__button.button--play,.full-start__button.view--torrent,.full-start__button.view--trailer,',
       '.full-start__button.view--online,.full-start__button.view--onlines_v1,',
       '.full-start__button.view--streamv1,.full-start__button.open--menu,',
       '.full-start__button.view--bazon,.full-start__button.view--filmixpva{',
       'border-radius:.7em!important;transition:filter .18s ease,transform .18s ease!important}',
       '.full-start__button.selector.focus{filter:brightness(1.22)!important;transform:scale(1.035)!important}',
+      '.full-start__button.view--torrent.focus,.full-start__button[class*="torrent"].focus{border-color:#30d158!important}',
+      '.full-start__button.view--trailer.focus{border-color:#ff453a!important}',
+      '.full-start__button.view--online.focus,.full-start__button.view--onlines_v1.focus,',
+      '.full-start__button.view--streamv1.focus,.full-start__button.open--menu.focus{border-color:#0a84ff!important}',
+      '.full-start__button.view--bazon.focus,.full-start__button.view--filmixpva.focus{border-color:#bf5af2!important}',
       '.selectbox[data-rmedia-source-box="1"] .selectbox-item{',
       'margin:.18em .7em!important;border:.11em solid transparent!important;',
       'border-radius:.75em!important;transition:background .16s ease,border-color .16s ease,transform .16s ease!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-torrent{',
-      'background:rgba(48,209,88,.18)!important;border-color:rgba(48,209,88,.7)!important}',
+      'background:rgba(48,209,88,.18)!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-online{',
-      'background:rgba(10,132,255,.18)!important;border-color:rgba(10,132,255,.72)!important}',
+      'background:rgba(10,132,255,.18)!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-trailer{',
-      'background:rgba(255,69,58,.18)!important;border-color:rgba(255,69,58,.72)!important}',
+      'background:rgba(255,69,58,.18)!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-torrent .selectbox-item__icon{color:#30d158!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-online .selectbox-item__icon{color:#4aa3ff!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-trailer .selectbox-item__icon{color:#ff6961!important}',
       '.selectbox[data-rmedia-source-box="1"] .selectbox-item.focus{',
       'filter:brightness(1.28)!important;transform:scale(1.025)!important;color:#fff!important}',
-      '.selectbox[data-rmedia-source-box="1"] .rm-source-torrent.focus{background:rgba(48,209,88,.38)!important}',
-      '.selectbox[data-rmedia-source-box="1"] .rm-source-online.focus{background:rgba(10,132,255,.38)!important}',
-      '.selectbox[data-rmedia-source-box="1"] .rm-source-trailer.focus{background:rgba(255,69,58,.38)!important}'
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-torrent.focus{',
+      'background:rgba(48,209,88,.38)!important;border-color:#30d158!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-online.focus{',
+      'background:rgba(10,132,255,.38)!important;border-color:#0a84ff!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-trailer.focus{',
+      'background:rgba(255,69,58,.38)!important;border-color:#ff453a!important}'
     ].join('');
     setStyle('buttons', css, enabled(KEYS.buttons));
   }
@@ -157,12 +165,18 @@
       box.setAttribute('data-rmedia-source-box', '1');
       box.querySelectorAll('.selectbox-item').forEach(function (item) {
         var itemTitle = item.querySelector('.selectbox-item__title');
+        var itemSubtitle = item.querySelector('.selectbox-item__subtitle');
+        var subtitle = String(itemSubtitle ? itemSubtitle.textContent : '').trim().toLowerCase();
+
+        if (itemTitle && /online_mod/.test(subtitle)) itemTitle.textContent = 'FILMIX';
+        else if (itemTitle && /bwarc/.test(subtitle)) itemTitle.textContent = 'KINOPUB';
+
         var text = String(itemTitle ? itemTitle.textContent : '').trim().toLowerCase();
 
         item.classList.remove('rm-source-torrent', 'rm-source-online', 'rm-source-trailer');
 
         if (/^(торрент|torrent)/.test(text)) item.classList.add('rm-source-torrent');
-        else if (/^(онлайн|online)/.test(text)) item.classList.add('rm-source-online');
+        else if (/^(онлайн|online|filmix|kinopub)/.test(text) || /online_mod|bwarc/.test(subtitle)) item.classList.add('rm-source-online');
         else if (/^(трейлер|трейлеры|трейлери|trailer)/.test(text)) item.classList.add('rm-source-trailer');
       });
     });
