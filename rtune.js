@@ -1,18 +1,19 @@
 /**
  * RTune for Lampa
  * Лёгкий тюнинг главной страницы без тяжёлой полноэкранной карточки.
- * Version: 1.0.0
+ * Version: 1.0.4
  * License: MIT
  */
 (function () {
     'use strict';
 
-    if (window.rtune_plugin_ready) return;
+    var VERSION = '1.0.4';
+    if (window.rtune_plugin_version === VERSION) return;
+    window.rtune_plugin_version = VERSION;
     window.rtune_plugin_ready = true;
 
     if (typeof Lampa === 'undefined') return;
 
-    var VERSION = '1.0.0';
     var COMPONENT = 'rtune';
     var STYLE_ID = 'rtune_style';
     var DETAILS_CACHE = 'rtune_tv_details_cache';
@@ -23,8 +24,8 @@
     var services = [
         { id: 'netflix', name: 'NETFLIX', provider: 8, color: '#e50914' },
         { id: 'disney', name: 'Disney+', provider: 337, color: '#1f80e0' },
-        { id: 'hbo', name: 'HBO', provider: 384, color: '#ffffff' },
-        { id: 'apple', name: 'Apple TV+', provider: 350, color: '#ffffff' },
+        { id: 'hbo', name: 'HBO', provider: 384, color: '#111111' },
+        { id: 'apple', name: 'Apple TV+', provider: 350, color: '#111111' },
         { id: 'prime', name: 'prime video', provider: 119, color: '#00a8e1' },
         { id: 'hulu', name: 'hulu', provider: 15, color: '#1ce783' },
         { id: 'paramount', name: 'Paramount+', provider: 531, color: '#1487ff' }
@@ -146,7 +147,7 @@
     function serviceCard(service) {
         return customCard({
             title: service.name,
-            className: 'rtune-service',
+            className: 'rtune-service rtune-service--' + service.id,
             html: '<div class="rtune-service__logo" style="color:' + service.color + '">' + service.name + '</div>',
             enter: function () {
                 openCategory(service.name, 'discover/movie?with_watch_providers=' + service.provider + '&watch_region=US&sort_by=popularity.desc');
@@ -168,9 +169,19 @@
     function addRows() {
         if (!Lampa.ContentRows || !Lampa.ContentRows.add) return;
 
-        Lampa.ContentRows.add({
+        (window.rtune_content_rows || []).forEach(function (row) {
+            try { Lampa.ContentRows.remove(row); } catch (error) {}
+        });
+        window.rtune_content_rows = [];
+
+        function addRow(row) {
+            window.rtune_content_rows.push(row);
+            Lampa.ContentRows.add(row);
+        }
+
+        addRow({
             name: 'rtune_releases',
-            title: '🔥 Новинки проката',
+            title: '🔥 Новинки фильмов',
             index: 0,
             screen: ['main'],
             call: function () {
@@ -179,7 +190,7 @@
                     request('movie/now_playing?region=US&page=1', function (json) {
                         var list = markTmdb(json.results, 'movie').filter(function (item) { return item.backdrop_path; }).slice(0, 6);
                         done({
-                            title: '🔥 Новинки проката',
+                            title: '🔥 Новинки фильмов',
                             results: list.map(heroCard),
                             params: { items: { mapping: 'line', view: 2 } }
                         });
@@ -188,10 +199,86 @@
             }
         });
 
-        Lampa.ContentRows.add({
+        addRow({
+            name: 'rtune_tv_new',
+            title: '📡 Новинки сериалов',
+            index: 1,
+            screen: ['main'],
+            call: function () {
+                if (!setting('rtune_home_tv', true)) return;
+                return function (done) {
+                    request('tv/on_the_air?page=1', function (json) {
+                        json.title = '📡 Новинки сериалов';
+                        json.results = markTmdb(json.results, 'tv');
+                        done(json);
+                    }, function () { done({ results: [] }); });
+                };
+            }
+        });
+
+        addRow({
+            name: 'rtune_ru_new',
+            title: '🇷🇺 Новинки русской ленты',
+            index: 2,
+            screen: ['main'],
+            call: function () {
+                if (!setting('rtune_home_ru', true)) return;
+                return function (done) {
+                    var year = new Date().getFullYear();
+                    request('discover/movie?with_original_language=ru&primary_release_date.gte=' + (year - 1) + '-01-01&sort_by=primary_release_date.desc&page=1', function (json) {
+                        json.title = '🇷🇺 Новинки русской ленты';
+                        json.results = markTmdb(json.results, 'movie');
+                        done(json);
+                    }, function () { done({ results: [] }); });
+                };
+            }
+        });
+
+        addRow({
+            name: 'rtune_ua_new',
+            title: '🇺🇦 Новинки украинской ленты',
+            index: 3,
+            screen: ['main'],
+            call: function () {
+                if (!setting('rtune_home_ua', true)) return;
+                return function (done) {
+                    var completed = 0;
+                    var combined = [];
+
+                    function finish(items) {
+                        combined = combined.concat(items || []);
+                        completed++;
+                        if (completed < 2) return;
+
+                        var seen = {};
+                        var unique = combined.filter(function (item) {
+                            if (!item || !item.id || seen[item.id]) return false;
+                            seen[item.id] = true;
+                            return true;
+                        }).sort(function (a, b) {
+                            return String(b.release_date || '').localeCompare(String(a.release_date || ''));
+                        });
+
+                        done({
+                            title: '🇺🇦 Новинки украинской ленты',
+                            results: markTmdb(unique, 'movie')
+                        });
+                    }
+
+                    request('discover/movie?with_original_language=uk&sort_by=primary_release_date.desc&page=1', function (json) {
+                        finish(json.results);
+                    }, function () { finish([]); });
+                    request('discover/movie?with_origin_country=UA&sort_by=primary_release_date.desc&page=1', function (json) {
+                        finish(json.results);
+                    }, function () { finish([]); });
+                };
+            }
+        });
+
+        addRow({
             name: 'rtune_streamings',
             title: '📺 Стриминги',
-            index: 1,
+            index: 4,
             screen: ['main'],
             call: function () {
                 if (!setting('rtune_home_streamings', true)) return;
@@ -205,10 +292,10 @@
             }
         });
 
-        Lampa.ContentRows.add({
+        addRow({
             name: 'rtune_moods',
             title: '🎭 Кино по настроению',
-            index: 2,
+            index: 5,
             screen: ['main'],
             call: function () {
                 if (!setting('rtune_home_moods', true)) return;
@@ -218,41 +305,6 @@
                         results: moods.map(moodCard),
                         params: { items: { mapping: 'line', view: 7 } }
                     });
-                };
-            }
-        });
-
-        Lampa.ContentRows.add({
-            name: 'rtune_ru_new',
-            title: '🇷🇺 Новинки Русской ленты',
-            index: 3,
-            screen: ['main'],
-            call: function () {
-                if (!setting('rtune_home_ru', true)) return;
-                return function (done) {
-                    var year = new Date().getFullYear();
-                    request('discover/movie?with_original_language=ru&primary_release_year=' + year + '&sort_by=popularity.desc&page=1', function (json) {
-                        json.title = '🇷🇺 Новинки Русской ленты';
-                        json.results = markTmdb(json.results, 'movie');
-                        done(json);
-                    }, function () { done({ results: [] }); });
-                };
-            }
-        });
-
-        Lampa.ContentRows.add({
-            name: 'rtune_tv_new',
-            title: '📡 Новинки сериалов',
-            index: 4,
-            screen: ['main'],
-            call: function () {
-                if (!setting('rtune_home_tv', true)) return;
-                return function (done) {
-                    request('tv/on_the_air?page=1', function (json) {
-                        json.title = '📡 Новинки сериалов';
-                        json.results = markTmdb(json.results, 'tv');
-                        done(json);
-                    }, function () { done({ results: [] }); });
                 };
             }
         });
@@ -393,6 +445,7 @@
             '.rtune-service{width:12em!important;height:6em!important;margin-right:.8em!important;background:#f3f3f3!important;border-radius:.65em!important;display:flex!important;align-items:center!important;justify-content:center!important}' +
             '.rtune-service.focus,.rtune-mood.focus{box-shadow:0 0 0 .22em #fff!important;transform:scale(1.035)}' +
             '.rtune-service__logo{font-size:1.25em;font-weight:800;text-align:center;letter-spacing:-.03em}' +
+            '.rtune-service--hbo .rtune-service__logo,.rtune-service--apple .rtune-service__logo{color:#111!important;-webkit-text-fill-color:#111!important;text-shadow:none!important;opacity:1!important}' +
             '.rtune-mood{width:12em!important;height:4em!important;margin-right:.8em!important;border-radius:.65em!important;background:#242424!important;display:flex!important;align-items:center!important;justify-content:center!important}' +
             '.rtune-mood__title{font-size:1em;font-weight:600;text-align:center;padding:0 .6em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
             '.rtune-season{position:absolute;left:0;top:0;z-index:4;padding:.18em .42em;border-radius:0 0 .45em 0;background:rgba(45,45,45,.92);color:#fff;font-weight:700;font-size:.9em}' +
@@ -412,6 +465,9 @@
     function setupSettings() {
         if (!Lampa.SettingsApi || !Lampa.SettingsApi.addComponent) return;
 
+        try { Lampa.SettingsApi.removeParams(COMPONENT); } catch (error) {}
+        try { Lampa.SettingsApi.removeComponent(COMPONENT); } catch (error) {}
+
         Lampa.SettingsApi.addComponent({
             component: COMPONENT,
             name: 'RTune',
@@ -420,11 +476,12 @@
 
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { type: 'title' }, field: { name: 'Главная страница' } });
         [
-            ['rtune_home_releases', 'Новинки проката', 'Большие баннеры только на главной', true],
+            ['rtune_home_releases', 'Новинки фильмов', 'Большие баннеры только на главной', true],
+            ['rtune_home_tv', 'Новинки сериалов', 'Свежие сериалы TMDB', true],
+            ['rtune_home_ru', 'Новинки русской ленты', 'Свежие фильмы на русском языке', true],
+            ['rtune_home_ua', 'Новинки украинской ленты', 'Украинские фильмы за последние два года', true],
             ['rtune_home_streamings', 'Стриминги', 'Netflix, HBO, Apple TV+ и другие', true],
-            ['rtune_home_moods', 'Кино по настроению', 'Быстрые подборки по жанрам', true],
-            ['rtune_home_ru', 'Новинки Русской ленты', 'Свежие фильмы на русском языке', true],
-            ['rtune_home_tv', 'Новинки сериалов', 'Свежие сериалы TMDB', true]
+            ['rtune_home_moods', 'Кино по настроению', 'Быстрые подборки по жанрам', true]
         ].forEach(function (item) {
             Lampa.SettingsApi.addParam({ component: COMPONENT, param: { name: item[0], type: 'trigger', default: item[3] }, field: { name: item[1], description: item[2] } });
         });
@@ -432,7 +489,21 @@
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { type: 'title' }, field: { name: 'Карточки' } });
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { name: 'rtune_badge_seasons', type: 'trigger', default: true }, field: { name: 'Сезон и серии', description: 'Подгружается лениво и хранится в кеше 7 дней' } });
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { name: 'rtune_hide_metadata', type: 'trigger', default: true }, field: { name: 'Скрывать метаданные', description: 'Оставляет лёгкую карточку и реакции со смайлами' } });
-        Lampa.SettingsApi.addParam({ component: COMPONENT, param: { name: 'rtune_tmdb_key', type: 'input', default: '', placeholder: 'Необязательно' }, field: { name: 'Свой ключ TMDB', description: 'Если пусто — используется ключ Lampa' } });
+    }
+
+    function refreshHomeOnce() {
+        var refreshKey = 'rtune_home_rows_applied_' + VERSION.replace(/\./g, '_');
+        if (Lampa.Storage.get(refreshKey, false)) return;
+
+        setTimeout(function () {
+            try {
+                var active = Lampa.Activity && Lampa.Activity.active ? Lampa.Activity.active() : null;
+                if (!active || active.component !== 'main') return;
+
+                Lampa.Storage.set(refreshKey, true);
+                Lampa.Activity.refresh();
+            } catch (error) {}
+        }, 1200);
     }
 
     function start() {
@@ -441,6 +512,7 @@
         setupSettings();
         observeCards();
         watchFull();
+        refreshHomeOnce();
         if (Lampa.Manifest && Lampa.Manifest.plugins) Lampa.Manifest.plugins = Lampa.Manifest.plugins.filter(function (item) { return item !== 'RTune'; });
         if (Lampa.Noty && !Lampa.Storage.get('rtune_welcome_' + VERSION, false)) {
             Lampa.Storage.set('rtune_welcome_' + VERSION, true);
