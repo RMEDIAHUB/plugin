@@ -1,13 +1,13 @@
 /**
  * RMEDIA Tune for Lampa
  * Лёгкий тюнинг главной страницы без тяжёлой полноэкранной карточки.
- * Version: 1.0.6
+ * Version: 1.0.7
  * License: MIT
  */
 (function () {
     'use strict';
 
-    var VERSION = '1.0.6';
+    var VERSION = '1.0.7';
     if (window.rtune_plugin_version === VERSION) return;
     window.rtune_plugin_version = VERSION;
     window.rtune_plugin_ready = true;
@@ -235,11 +235,7 @@
                         var list = markTmdb(json.results, 'movie').filter(function (item) { return item.backdrop_path; }).slice(0, 6);
                         done({
                             title: '🔥 Новинки фильмов',
-                            url: path,
                             source: 'tmdb',
-                            page: json.page || 1,
-                            total_pages: json.total_pages || 1,
-                            total_results: json.total_results || list.length,
                             results: list.map(heroCard),
                             params: { items: { mapping: 'line', view: 2 } }
                         });
@@ -267,7 +263,7 @@
         addRow({
             name: 'rtune_ru_new',
             title: '🇷🇺 Новинки русской ленты',
-            index: 2,
+            index: 4,
             screen: ['main'],
             call: function () {
                 if (!setting('rtune_home_ru', true)) return;
@@ -285,7 +281,7 @@
         addRow({
             name: 'rtune_ua_new',
             title: '🇺🇦 Новинки украинской ленты',
-            index: 3,
+            index: 5,
             screen: ['main'],
             call: function () {
                 if (!setting('rtune_home_ua', true)) return;
@@ -481,7 +477,8 @@
         Lampa.Listener.follow('full', function (event) {
             if (!event || event.type !== 'complite' || !event.object || !event.object.activity) return;
             var activity = event.object.activity;
-            [0, 250, 900].forEach(function (delay) {
+            // На старых ТВ соседние плагины дорисовывают реакции заметно позже браузера.
+            [0, 250, 900, 1800, 3500].forEach(function (delay) {
                 setTimeout(function () {
                     try { restoreCompactCard(activity.render()); } catch (e) { }
                 }, delay);
