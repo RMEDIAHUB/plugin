@@ -1,7 +1,7 @@
 /**
  * RTune for Lampa
  * Лёгкий тюнинг главной страницы без тяжёлой полноэкранной карточки.
- * Version: 1.0.1
+ * Version: 1.0.0
  * License: MIT
  */
 (function () {
@@ -12,7 +12,7 @@
 
     if (typeof Lampa === 'undefined') return;
 
-    var VERSION = '1.0.1';
+    var VERSION = '1.0.0';
     var COMPONENT = 'rtune';
     var STYLE_ID = 'rtune_style';
     var DETAILS_CACHE = 'rtune_tv_details_cache';
@@ -23,8 +23,8 @@
     var services = [
         { id: 'netflix', name: 'NETFLIX', provider: 8, color: '#e50914' },
         { id: 'disney', name: 'Disney+', provider: 337, color: '#1f80e0' },
-        { id: 'hbo', name: 'HBO', provider: 384, color: '#111111' },
-        { id: 'apple', name: 'Apple TV+', provider: 350, color: '#111111' },
+        { id: 'hbo', name: 'HBO', provider: 384, color: '#ffffff' },
+        { id: 'apple', name: 'Apple TV+', provider: 350, color: '#ffffff' },
         { id: 'prime', name: 'prime video', provider: 119, color: '#00a8e1' },
         { id: 'hulu', name: 'hulu', provider: 15, color: '#1ce783' },
         { id: 'paramount', name: 'Paramount+', provider: 531, color: '#1487ff' }
