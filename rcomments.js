@@ -2,7 +2,7 @@
  * RMEDIA Comments for Lampa
  * Безопасный просмотр комментариев HDRezka без обязательного английского названия.
  *
- * Version: 1.0.0
+ * Version: 1.0.2
  * License: MIT
  */
 (function () {
@@ -13,10 +13,11 @@
 
   var ID = 'rmediahub_comments';
   var NAME = 'RMEDIA Comments';
-  var VERSION = '1.0.0';
+  var VERSION = '1.0.2';
   var BUTTON_CLASS = 'button--rmedia-comments';
   var DEFAULT_HOST = 'https://rezka.ag';
   var DEFAULT_PROXY = 'https://worker-patient-dream-26d8.bdvburik.workers.dev:8443/';
+  var requestBusy = false;
 
   var KEYS = {
     mode: 'rmedia_comments_mode',
@@ -54,6 +55,27 @@
       if (active) Lampa.Loading.start();
       else Lampa.Loading.stop();
     } catch (error) {}
+  }
+
+  function wait(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function retry(factory, attempts, pause) {
+    return factory().catch(function (error) {
+      if (attempts <= 1) throw error;
+      return wait(pause || 500).then(function () {
+        return retry(factory, attempts - 1, pause);
+      });
+    });
+  }
+
+  function activeController() {
+    try {
+      var enabled = Lampa.Controller.enabled();
+      if (enabled && enabled.name && enabled.name !== 'loading' && enabled.name !== 'modal') return enabled.name;
+    } catch (error) {}
+    return 'full_start';
   }
 
   function cleanTitle(value) {
@@ -326,7 +348,7 @@
       if (item.tagName !== 'LI') continue;
 
       var wrap = document.createElement('div');
-      wrap.className = 'rm-comment-wrap';
+      wrap.className = 'rm-comment-wrap selector';
       wrap.style.marginLeft = Math.min(level, 4) * 1.15 + 'em';
       wrap.appendChild(commentNode(item));
       fragment.appendChild(wrap);
@@ -348,6 +370,7 @@
       '.rm-comments{padding:.2em .4em 1em}',
       '.rm-comments__source{opacity:.55;font-size:.85em;margin:0 0 1em .2em}',
       '.rm-comment-wrap{margin-bottom:.45em}',
+      '.rm-comment-wrap.focus .rm-comment__body{box-shadow:0 0 0 .18em #fff}',
       '.rm-comment{display:flex;align-items:flex-start}',
       '.rm-comment__avatar{width:2.45em;height:2.45em;border-radius:50%;flex:0 0 auto;',
       'display:flex;align-items:center;justify-content:center;margin-right:.7em;',
@@ -362,7 +385,7 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
-  function openComments(result) {
+  function openComments(result, returnController) {
     var config = settings();
     var target = config.host + '/ajax/get_comments/?t=' + Date.now() +
       '&news_id=' + encodeURIComponent(result.id) +
@@ -396,49 +419,72 @@
       if (!state.count) throw new Error('Комментарии отсутствуют');
 
       ensureStyles();
+      var firstComment = container.querySelector('.rm-comment-wrap.selector');
+      var closed = false;
       Lampa.Modal.open({
         title: 'Комментарии • ' + (result.title || 'HDRezka'),
         html: window.$ ? window.$(container) : container,
         size: 'large',
         mask: true,
+        select: firstComment || false,
         onBack: function () {
+          if (closed) return;
+          closed = true;
           Lampa.Modal.close();
-          try { Lampa.Controller.toggle('content'); } catch (error) {}
+          setTimeout(function () {
+            try { Lampa.Controller.toggle(returnController || 'full_start'); }
+            catch (error) {
+              try { Lampa.Controller.toggle('full_start'); } catch (fallbackError) {}
+            }
+          }, 30);
         }
       });
     });
   }
 
   function loadForMovie(movie, method) {
+    if (requestBusy) return;
+    requestBusy = true;
+
     var config = settings();
     var type = movieType(movie, method);
     var year = movieYear(movie);
     var initial = baseTitles(movie);
+    var returnController = activeController();
 
     if (config.mode === 'cub') {
+      requestBusy = false;
       openCub(movie);
       return;
     }
 
     loading(true);
-    tmdbDetails(movie, type).then(function (extra) {
-      var titles = uniqueTitles(initial.concat(extra));
-      if (!titles.length) throw new Error('В карточке отсутствует название');
-      return searchAll(titles, year, 0);
+    retry(function () {
+      return tmdbDetails(movie, type).then(function (extra) {
+        var titles = uniqueTitles(initial.concat(extra));
+        if (!titles.length) throw new Error('В карточке отсутствует название');
+        return searchAll(titles, year, 0);
+      }).then(function (result) {
+        if (!result) throw new Error('Фильм или сериал на Rezka не найден');
+        return result;
+      });
+    }, 2, 550).then(function (result) {
+      loading(false);
+      return retry(function () {
+        return openComments(result, returnController);
+      }, 2, 650);
     }).then(function (result) {
-      if (!result) throw new Error('Фильм или сериал на Rezka не найден');
-      return openComments(result);
+      requestBusy = false;
     }).catch(function (error) {
+      requestBusy = false;
+      loading(false);
       console.warn(NAME + ':', error);
       if (config.mode === 'auto') {
-        loading(false);
         notify('HDRezka недоступна — открываю комментарии CUB');
         openCub(movie);
       } else {
         notify(error && error.message ? error.message : 'Не удалось загрузить комментарии');
       }
-    }).then(function () {
-      loading(false);
     });
   }
 
