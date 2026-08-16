@@ -2,7 +2,7 @@
  * RMEDIA Tweaks for Lampa
  * Небольшие улучшения интерфейса без рекламы, аналитики и внешних запросов.
  *
- * Version: 1.1.0
+ * Version: 1.1.1
  * License: MIT
  */
 (function () {
@@ -13,7 +13,7 @@
 
   var ID = 'rmediahub_tweaks';
   var NAME = 'RMEDIA Tweaks';
-  var VERSION = '1.1.0';
+  var VERSION = '1.1.1';
   var observer = null;
   var refreshTimer = null;
   var clockTimer = null;
@@ -126,11 +126,11 @@
       'margin:.18em .7em!important;border:.11em solid transparent!important;',
       'border-radius:.75em!important;transition:background .16s ease,border-color .16s ease,transform .16s ease!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-torrent{',
-      'background:rgba(48,209,88,.18)!important}',
+      'background:transparent!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-online{',
-      'background:rgba(10,132,255,.18)!important}',
+      'background:transparent!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-trailer{',
-      'background:rgba(255,69,58,.18)!important}',
+      'background:transparent!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-torrent .selectbox-item__icon{color:#30d158!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-online .selectbox-item__icon{color:#4aa3ff!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-trailer .selectbox-item__icon{color:#ff6961!important}',
