@@ -1,13 +1,13 @@
 /**
  * RMEDIA Tune for Lampa
  * Лёгкий тюнинг главной страницы без тяжёлой полноэкранной карточки.
- * Version: 1.0.7
+ * Version: 1.0.8
  * License: MIT
  */
 (function () {
     'use strict';
 
-    var VERSION = '1.0.7';
+    var VERSION = '1.0.8';
     if (window.rtune_plugin_version === VERSION) return;
     window.rtune_plugin_version = VERSION;
     window.rtune_plugin_ready = true;
@@ -235,7 +235,11 @@
                         var list = markTmdb(json.results, 'movie').filter(function (item) { return item.backdrop_path; }).slice(0, 6);
                         done({
                             title: '🔥 Новинки фильмов',
+                            url: path,
                             source: 'tmdb',
+                            page: json.page || 1,
+                            total_pages: json.total_pages || 1,
+                            total_results: json.total_results || list.length,
                             results: list.map(heroCard),
                             params: { items: { mapping: 'line', view: 2 } }
                         });
@@ -462,7 +466,32 @@
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
-    function restoreCompactCard(render) {
+    function shortNumber(value) {
+        try { return Lampa.Utils.bigNumberToShort(value); } catch (error) {}
+        value = Number(value || 0);
+        if (value >= 1000000) return (value / 1000000).toFixed(value >= 10000000 ? 0 : 1) + 'M';
+        if (value >= 1000) return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + 'K';
+        return String(value);
+    }
+
+    function restoreReactions(render, data) {
+        if (!render || !render.length) return;
+        var source = data && data.reactions && data.reactions.result;
+        if (!source || !source.length) return;
+
+        var icons = { fire: '🔥', nice: '👍', think: '🤔', shit: '💩', bore: '😴' };
+        var body = render.find('.full-start-new__reactions').first();
+        if (body.length && body.children().length) return;
+        if (!body.length) body = $('<div class="full-start-new__reactions rtune-fallback-reactions"></div>');
+        else body.addClass('rtune-fallback-reactions').empty();
+        source.slice().sort(function (a, b) { return Number(b.counter || 0) - Number(a.counter || 0); }).forEach(function (item) {
+            if (!icons[item.type]) return;
+            body.append('<div class="rtune-fallback-reaction"><span>' + icons[item.type] + '</span><b>' + shortNumber(item.counter) + '</b></div>');
+        });
+        if (body.children().length) body.insertBefore(render.find('.full-start-new__buttons').first());
+    }
+
+    function restoreCompactCard(render, data) {
         if (!render || !render.length) return;
         render.removeClass('applecation').addClass('rtune-compact');
         render.find('.applecation__left,.applecation__overlay').remove();
@@ -470,17 +499,19 @@
         var tagline = render.find('.full-start-new__tagline').first();
         if (line.length && tagline.length) line.insertAfter(tagline);
         if (setting('rtune_hide_metadata', true)) render.find('.full-metadata').remove();
+        restoreReactions(render, data);
     }
 
     function watchFull() {
         if (!Lampa.Listener || !Lampa.Listener.follow) return;
         Lampa.Listener.follow('full', function (event) {
-            if (!event || event.type !== 'complite' || !event.object || !event.object.activity) return;
+            if (!event || (event.type !== 'complite' && event.type !== 'complete') || !event.object || !event.object.activity) return;
             var activity = event.object.activity;
+            var data = event.data || {};
             // На старых ТВ соседние плагины дорисовывают реакции заметно позже браузера.
             [0, 250, 900, 1800, 3500].forEach(function (delay) {
                 setTimeout(function () {
-                    try { restoreCompactCard(activity.render()); } catch (e) { }
+                    try { restoreCompactCard(activity.render(), data); } catch (e) { }
                 }, delay);
             });
         });
@@ -511,6 +542,8 @@
             '.rtune-compact .full-start-new__title{display:block!important}' +
             '.rtune-compact .full-start-new__tagline{display:block!important}' +
             '.rtune-compact .full-start-new__reactions:empty{display:none!important}' +
+            '.rtune-fallback-reactions{display:flex!important;gap:1.25em!important;align-items:center!important;margin:.7em 0!important}' +
+            '.rtune-fallback-reaction{display:flex;align-items:center;gap:.35em;font-size:1.05em}.rtune-fallback-reaction span{font-size:1.35em}.rtune-fallback-reaction b{font-weight:700}' +
             (setting('rtune_hide_metadata', true) ? '.full-metadata{display:none!important}' : '') +
             '@media screen and (max-width:700px){.rtune-hero{width:78vw!important;height:16em!important}.rtune-hero__text{display:none}.rtune-service{width:9.5em!important;height:5em!important}.rtune-mood{width:10.5em!important}.rtune-compact .full-start-new__left{flex-basis:11em!important;max-width:11em!important}}' +
             '</style>');
