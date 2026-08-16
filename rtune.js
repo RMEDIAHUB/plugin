@@ -1,13 +1,13 @@
 /**
- * RTune for Lampa
+ * RMEDIA Tune for Lampa
  * Лёгкий тюнинг главной страницы без тяжёлой полноэкранной карточки.
- * Version: 1.0.4
+ * Version: 1.0.5
  * License: MIT
  */
 (function () {
     'use strict';
 
-    var VERSION = '1.0.4';
+    var VERSION = '1.0.5';
     if (window.rtune_plugin_version === VERSION) return;
     window.rtune_plugin_version = VERSION;
     window.rtune_plugin_ready = true;
@@ -77,6 +77,24 @@
             if (mediaType && !item.media_type) item.media_type = mediaType;
             return item;
         });
+    }
+
+    function usableCards(items, mediaType) {
+        var today = new Date().toISOString().slice(0, 10);
+        return markTmdb(items, mediaType).filter(function (item) {
+            if (!item || !item.id || !item.poster_path) return false;
+            var date = mediaType === 'tv' ? item.first_air_date : item.release_date;
+            return !date || date <= today;
+        });
+    }
+
+    function rowData(json, title, url, mediaType) {
+        json = json || {};
+        json.title = title;
+        json.url = url;
+        json.source = 'tmdb';
+        json.results = usableCards(json.results, mediaType);
+        return json;
     }
 
     function openMovie(movie) {
@@ -187,10 +205,16 @@
             call: function () {
                 if (!setting('rtune_home_releases', true)) return;
                 return function (done) {
-                    request('movie/now_playing?region=US&page=1', function (json) {
+                    var path = 'movie/now_playing?region=US';
+                    request(path, function (json) {
                         var list = markTmdb(json.results, 'movie').filter(function (item) { return item.backdrop_path; }).slice(0, 6);
                         done({
                             title: '🔥 Новинки фильмов',
+                            url: path,
+                            source: 'tmdb',
+                            page: json.page || 1,
+                            total_pages: json.total_pages || 1,
+                            total_results: json.total_results || list.length,
                             results: list.map(heroCard),
                             params: { items: { mapping: 'line', view: 2 } }
                         });
@@ -207,10 +231,9 @@
             call: function () {
                 if (!setting('rtune_home_tv', true)) return;
                 return function (done) {
-                    request('tv/on_the_air?page=1', function (json) {
-                        json.title = '📡 Новинки сериалов';
-                        json.results = markTmdb(json.results, 'tv');
-                        done(json);
+                    var path = 'tv/on_the_air';
+                    request(path, function (json) {
+                        done(rowData(json, '📡 Новинки сериалов', path, 'tv'));
                     }, function () { done({ results: [] }); });
                 };
             }
@@ -225,10 +248,10 @@
                 if (!setting('rtune_home_ru', true)) return;
                 return function (done) {
                     var year = new Date().getFullYear();
-                    request('discover/movie?with_original_language=ru&primary_release_date.gte=' + (year - 1) + '-01-01&sort_by=primary_release_date.desc&page=1', function (json) {
-                        json.title = '🇷🇺 Новинки русской ленты';
-                        json.results = markTmdb(json.results, 'movie');
-                        done(json);
+                    var today = new Date().toISOString().slice(0, 10);
+                    var path = 'discover/movie?with_original_language=ru&primary_release_date.gte=' + (year - 1) + '-01-01&primary_release_date.lte=' + today + '&sort_by=primary_release_date.desc';
+                    request(path, function (json) {
+                        done(rowData(json, '🇷🇺 Новинки русской ленты', path, 'movie'));
                     }, function () { done({ results: [] }); });
                 };
             }
@@ -242,11 +265,16 @@
             call: function () {
                 if (!setting('rtune_home_ua', true)) return;
                 return function (done) {
+                    var year = new Date().getFullYear();
+                    var today = new Date().toISOString().slice(0, 10);
                     var completed = 0;
                     var combined = [];
+                    var pageCount = 1;
 
-                    function finish(items) {
-                        combined = combined.concat(items || []);
+                    function finish(json) {
+                        json = json || {};
+                        combined = combined.concat(json.results || []);
+                        pageCount = Math.max(pageCount, json.total_pages || 1);
                         completed++;
                         if (completed < 2) return;
 
@@ -261,16 +289,20 @@
 
                         done({
                             title: '🇺🇦 Новинки украинской ленты',
-                            results: markTmdb(unique, 'movie')
+                            url: primaryPath,
+                            source: 'tmdb',
+                            page: 1,
+                            total_pages: pageCount,
+                            total_results: unique.length,
+                            results: usableCards(unique, 'movie')
                         });
                     }
 
-                    request('discover/movie?with_original_language=uk&sort_by=primary_release_date.desc&page=1', function (json) {
-                        finish(json.results);
-                    }, function () { finish([]); });
-                    request('discover/movie?with_origin_country=UA&sort_by=primary_release_date.desc&page=1', function (json) {
-                        finish(json.results);
-                    }, function () { finish([]); });
+                    var dates = '&primary_release_date.gte=' + (year - 4) + '-01-01&primary_release_date.lte=' + today;
+                    var primaryPath = 'discover/movie?with_original_language=uk' + dates + '&sort_by=primary_release_date.desc';
+                    var countryPath = 'discover/movie?with_origin_country=UA' + dates + '&sort_by=primary_release_date.desc';
+                    request(primaryPath, finish, function () { finish({ results: [] }); });
+                    request(countryPath, finish, function () { finish({ results: [] }); });
                 };
             }
         });
@@ -470,7 +502,7 @@
 
         Lampa.SettingsApi.addComponent({
             component: COMPONENT,
-            name: 'RTune',
+            name: 'RMEDIA Tune',
             icon: '<svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="white" stroke-width="2"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M10 14v6"/></svg>'
         });
 
@@ -513,10 +545,10 @@
         observeCards();
         watchFull();
         refreshHomeOnce();
-        if (Lampa.Manifest && Lampa.Manifest.plugins) Lampa.Manifest.plugins = Lampa.Manifest.plugins.filter(function (item) { return item !== 'RTune'; });
+        if (Lampa.Manifest && Lampa.Manifest.plugins) Lampa.Manifest.plugins = Lampa.Manifest.plugins.filter(function (item) { return item !== 'RTune' && item !== 'RMEDIA Tune'; });
         if (Lampa.Noty && !Lampa.Storage.get('rtune_welcome_' + VERSION, false)) {
             Lampa.Storage.set('rtune_welcome_' + VERSION, true);
-            Lampa.Noty.show('RTune ' + VERSION + ' установлен');
+            Lampa.Noty.show('RMEDIA Tune ' + VERSION + ' установлен');
         }
     }
 
