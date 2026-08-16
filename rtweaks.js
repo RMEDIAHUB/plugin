@@ -2,7 +2,7 @@
  * RMEDIA Tweaks for Lampa
  * Небольшие улучшения интерфейса без рекламы, аналитики и внешних запросов.
  *
- * Version: 1.0.0
+ * Version: 1.0.1
  * License: MIT
  */
 (function () {
@@ -13,7 +13,7 @@
 
   var ID = 'rmediahub_tweaks';
   var NAME = 'RMEDIA Tweaks';
-  var VERSION = '1.0.0';
+  var VERSION = '1.0.1';
   var observer = null;
   var refreshTimer = null;
   var clockTimer = null;
@@ -96,6 +96,8 @@
 
   function applyButtonStyles() {
     var css = [
+      '.full-start__button.button--play{',
+      'background:rgba(255,159,10,.22)!important;border:.11em solid #ff9f0a!important}',
       '.full-start__button.view--torrent,.full-start__button[class*="torrent"]{',
       'background:rgba(48,209,88,.22)!important;border:.11em solid #30d158!important}',
       '.full-start__button.view--trailer{',
@@ -105,14 +107,61 @@
       'background:rgba(10,132,255,.22)!important;border:.11em solid #0a84ff!important}',
       '.full-start__button.view--bazon,.full-start__button.view--filmixpva{',
       'background:rgba(191,90,242,.22)!important;border:.11em solid #bf5af2!important}',
-      '.full-start__button.view--torrent,.full-start__button.view--trailer,',
+      '.full-start__button.button--play,.full-start__button.view--torrent,.full-start__button.view--trailer,',
       '.full-start__button.view--online,.full-start__button.view--onlines_v1,',
       '.full-start__button.view--streamv1,.full-start__button.open--menu,',
       '.full-start__button.view--bazon,.full-start__button.view--filmixpva{',
       'border-radius:.7em!important;transition:filter .18s ease,transform .18s ease!important}',
-      '.full-start__button.selector.focus{filter:brightness(1.22)!important;transform:scale(1.035)!important}'
+      '.full-start__button.selector.focus{filter:brightness(1.22)!important;transform:scale(1.035)!important}',
+      '.selectbox[data-rmedia-source-box="1"] .selectbox-item{',
+      'margin:.18em .7em!important;border:.11em solid transparent!important;',
+      'border-radius:.75em!important;transition:background .16s ease,border-color .16s ease,transform .16s ease!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-torrent{',
+      'background:rgba(48,209,88,.18)!important;border-color:rgba(48,209,88,.7)!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-online{',
+      'background:rgba(10,132,255,.18)!important;border-color:rgba(10,132,255,.72)!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-trailer{',
+      'background:rgba(255,69,58,.18)!important;border-color:rgba(255,69,58,.72)!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-torrent .selectbox-item__icon{color:#30d158!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-online .selectbox-item__icon{color:#4aa3ff!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-trailer .selectbox-item__icon{color:#ff6961!important}',
+      '.selectbox[data-rmedia-source-box="1"] .selectbox-item.focus{',
+      'filter:brightness(1.28)!important;transform:scale(1.025)!important;color:#fff!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-torrent.focus{background:rgba(48,209,88,.38)!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-online.focus{background:rgba(10,132,255,.38)!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-source-trailer.focus{background:rgba(255,69,58,.38)!important}'
     ].join('');
     setStyle('buttons', css, enabled(KEYS.buttons));
+  }
+
+  function applySourceButtonClasses() {
+    var active = enabled(KEYS.buttons);
+
+    document.querySelectorAll('.selectbox').forEach(function (box) {
+      var heading = box.querySelector('.selectbox__title');
+      var title = String(heading ? heading.textContent : '').trim().toLowerCase();
+      var sourceBox = /^(источник|джерело|source)$/.test(title);
+
+      if (!active || !sourceBox) {
+        box.removeAttribute('data-rmedia-source-box');
+        box.querySelectorAll('.rm-source-torrent,.rm-source-online,.rm-source-trailer').forEach(function (item) {
+          item.classList.remove('rm-source-torrent', 'rm-source-online', 'rm-source-trailer');
+        });
+        return;
+      }
+
+      box.setAttribute('data-rmedia-source-box', '1');
+      box.querySelectorAll('.selectbox-item').forEach(function (item) {
+        var itemTitle = item.querySelector('.selectbox-item__title');
+        var text = String(itemTitle ? itemTitle.textContent : '').trim().toLowerCase();
+
+        item.classList.remove('rm-source-torrent', 'rm-source-online', 'rm-source-trailer');
+
+        if (/^(торрент|torrent)/.test(text)) item.classList.add('rm-source-torrent');
+        else if (/^(онлайн|online)/.test(text)) item.classList.add('rm-source-online');
+        else if (/^(трейлер|трейлеры|трейлери|trailer)/.test(text)) item.classList.add('rm-source-trailer');
+      });
+    });
   }
 
   function applyPlayerStyle() {
@@ -290,6 +339,7 @@
   function applyAll() {
     baseStyles();
     applyButtonStyles();
+    applySourceButtonClasses();
     applyPlayerStyle();
     applySaverClock();
     applyHeaderButtons();
