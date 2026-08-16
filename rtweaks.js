@@ -2,7 +2,7 @@
  * RMEDIA Tweaks for Lampa
  * Небольшие улучшения интерфейса без рекламы, аналитики и внешних запросов.
  *
- * Version: 1.0.1
+ * Version: 1.0.2
  * License: MIT
  */
 (function () {
@@ -13,7 +13,7 @@
 
   var ID = 'rmediahub_tweaks';
   var NAME = 'RMEDIA Tweaks';
-  var VERSION = '1.0.1';
+  var VERSION = '1.0.2';
   var observer = null;
   var refreshTimer = null;
   var clockTimer = null;
@@ -97,7 +97,11 @@
   function applyButtonStyles() {
     var css = [
       '.full-start__button.button--play{',
-      'background:rgba(255,159,10,.22)!important;border:.11em solid #ff9f0a!important}',
+      'background:#111!important;border:.11em solid #ff9f0a!important;color:#fff!important}',
+      '.full-start__button.button--play.focus{',
+      'background:#111!important;color:#fff!important;border-color:#ffb340!important;',
+      'box-shadow:0 0 .42em rgba(255,159,10,.7)!important}',
+      '.full-start__button.button--play svg,.full-start__button.button--play span{color:#fff!important}',
       '.full-start__button.view--torrent,.full-start__button[class*="torrent"]{',
       'background:rgba(48,209,88,.22)!important;border:.11em solid #30d158!important}',
       '.full-start__button.view--trailer{',
