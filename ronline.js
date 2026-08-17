@@ -3,7 +3,7 @@
  * Безопасное подключение личных аккаунтов Filmix и KinoPub.
  * Токены хранятся только локально в Lampa.Storage.
  *
- * Version: 1.0.0
+ * Version: 2.0.0
  * License: MIT
  */
 (function () {
@@ -14,13 +14,14 @@
 
   var ID = 'rmedia_online';
   var NAME = 'RMEDIA Online';
-  var VERSION = '1.0.0';
+  var VERSION = '2.0.0';
   var FILMIX_API = 'http://filmixapp.cyou/api/v2/';
   var KP_API = 'https://api.srvkp.com/v1/';
   var KP_DEVICE = 'https://api.srvkp.com/oauth2/device';
   var KP_TOKEN = 'https://api.srvkp.com/oauth2/token';
   var filmixPoll = null;
   var kinoPoll = null;
+  var onlineLoading = false;
 
   var KEYS = {
     enabled: 'rmedia_online_enabled',
@@ -128,6 +129,116 @@
       set(KEYS.filmixStatus, user);
       return user;
     });
+  }
+
+  function cleanTitle(value) {
+    return String(value || '').replace(/[\s.,:;’'`!?]+/g, ' ').trim();
+  }
+
+  function normalizeTitle(value) {
+    return cleanTitle(value).toLowerCase().replace(/ё/g, 'е').replace(/[\-\u2010-\u2015]+/g, '-');
+  }
+
+  function movieYear(movie) {
+    var date = movie && (movie.release_date || movie.first_air_date || movie.last_air_date) || '';
+    return parseInt(String(date).slice(0, 4), 10) || 0;
+  }
+
+  function filmixSearch(movie) {
+    var token = String(get(KEYS.filmixToken, ''));
+    if (!token) return Promise.reject(new Error('Сначала подключите Filmix в настройках RMEDIA Online'));
+    var title = movie && (movie.title || movie.name || movie.original_title || movie.original_name) || '';
+    var query = cleanTitle(title);
+    return requestNative(FILMIX_API + 'search' + filmixQuery(token) + '&story=' + encodeURIComponent(query), {
+      requestOptions: filmixRequestOptions(), timeout: 18000
+    }).then(function (items) {
+      if (!Array.isArray(items) || !items.length) throw new Error('Filmix ничего не нашёл по запросу «' + query + '»');
+      var wanted = normalizeTitle(title);
+      var year = movieYear(movie);
+      var ranked = items.map(function (item) {
+        var itemTitle = item.title || item.name || '';
+        var original = item.orig_title || item.original_title || item.original_name || '';
+        var itemYear = Number(item.year || (item.alt_name && String(item.alt_name).split('-').pop()) || 0);
+        var score = 0;
+        if (normalizeTitle(itemTitle) === wanted || normalizeTitle(original) === wanted) score += 20;
+        if (year && itemYear === year) score += 10;
+        else if (year && itemYear && Math.abs(itemYear - year) <= 1) score += 4;
+        return { item: item, score: score };
+      }).sort(function (a, b) { return b.score - a.score; });
+      return ranked[0].item;
+    });
+  }
+
+  function filmixPost(id) {
+    var token = String(get(KEYS.filmixToken, ''));
+    return requestNative(FILMIX_API + 'post/' + encodeURIComponent(id) + filmixQuery(token), {
+      requestOptions: filmixRequestOptions(), timeout: 18000
+    }).then(function (result) {
+      if (!result || !result.player_links) throw new Error('Filmix не вернул ссылки для просмотра');
+      return result;
+    });
+  }
+
+  function allowedFilmixQuality() {
+    var user = get(KEYS.filmixStatus, {}) || {};
+    if (user.is_pro_plus) return 2160;
+    if (user.is_pro) return 1080;
+    return 720;
+  }
+
+  function qualitiesFromLink(link, declared) {
+    var list = Array.isArray(declared) ? declared.map(Number) : [];
+    var match = String(link || '').match(/\[([\d,]+)\]\.mp4/i);
+    if (match) list = match[1].split(',').map(Number);
+    var max = allowedFilmixQuality();
+    return list.filter(function (q) { return q && q <= max; }).sort(function (a, b) { return b - a; });
+  }
+
+  function playerData(link, declared, title) {
+    var qualities = qualitiesFromLink(link, declared);
+    var map = {};
+    var pattern = String(link || '').replace(/\[[\d,]+\](\.mp4)/i, '%s$1');
+    qualities.forEach(function (q) { map[q + 'p'] = pattern.replace(/%s(\.mp4)/i, q + '$1'); });
+    var first = qualities.length ? map[qualities[0] + 'p'] : String(link || '');
+    return { url: first, quality: Object.keys(map).length ? map : false, title: title };
+  }
+
+  function flattenFilmix(post, movie) {
+    var links = post.player_links || {};
+    var result = [];
+    var baseTitle = movie.title || movie.name || 'Filmix';
+    if (links.movie) Object.keys(links.movie).forEach(function (key) {
+      var file = links.movie[key] || {};
+      var data = playerData(file.link, file.qualities, baseTitle + ' · ' + (file.translation || key));
+      if (data.url) result.push({ title: file.translation || 'Filmix', subtitle: bestQuality(data), player: data });
+    });
+    if (links.playlist) Object.keys(links.playlist).forEach(function (seasonKey) {
+      var season = links.playlist[seasonKey] || {};
+      Object.keys(season).forEach(function (voiceKey) {
+        var episodes = season[voiceKey] || {};
+        Object.keys(episodes).forEach(function (episodeKey) {
+          var file = episodes[episodeKey] || {};
+          var label = 'Сезон ' + seasonKey + ' · Серия ' + episodeKey + ' · ' + voiceKey;
+          var data = playerData(file.link, file.qualities, baseTitle + ' · ' + label);
+          if (data.url) result.push({ title: label, subtitle: bestQuality(data), player: data, season: seasonKey, episode: episodeKey });
+        });
+      });
+    });
+    return result;
+  }
+
+  function bestQuality(data) {
+    var keys = data && data.quality ? Object.keys(data.quality) : [];
+    return keys.length ? 'Filmix · до ' + keys[0] : 'Filmix';
+  }
+
+  function playFilmix(item, all) {
+    Lampa.Player.play(item.player);
+    if (item.season && Lampa.Platform && Lampa.Platform.version) {
+      var playlist = all.filter(function (entry) { return String(entry.season) === String(item.season); })
+        .map(function (entry) { return entry.player; });
+      if (playlist.length) Lampa.Player.playlist(playlist);
+    }
   }
 
   function filmixLabel(user) {
@@ -381,6 +492,132 @@
     addToggle(KEYS.check, 'Проверить подключения', 'Проверить Filmix и KinoPub прямо сейчас', false, checkAccounts);
   }
 
+  function itemView(entry) {
+    var view = $('<div class="online selector rmedia-online-item">' +
+      '<div class="online__body">' +
+      '<div class="rmedia-online-play"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7L8 5z" fill="currentColor"/></svg></div>' +
+      '<div class="online__title"></div><div class="online__quality"></div>' +
+      '</div></div>');
+    view.find('.online__title').text(entry.title);
+    view.find('.online__quality').text(entry.subtitle || 'Filmix');
+    return view;
+  }
+
+  function RMediaOnlineComponent(object) {
+    var scroll = new Lampa.Scroll({ mask: true, over: true });
+    var files = new Lampa.Explorer(object);
+    var last = null;
+    var destroyed = false;
+    var entries = [];
+    var self = this;
+
+    function showEmpty(message) {
+      var empty = Lampa.Template.get('list_empty');
+      empty.find('.empty__descr').text(message || 'Нет доступных видео');
+      scroll.append(empty);
+    }
+
+    function appendItems(items) {
+      entries = items;
+      if (!items.length) return showEmpty('Filmix не вернул доступных переводов');
+      items.forEach(function (entry) {
+        var view = itemView(entry);
+        view.on('hover:focus', function () { last = view[0]; });
+        view.on('hover:enter', function () { playFilmix(entry, entries); });
+        scroll.append(view);
+      });
+      self.start(true);
+    }
+
+    this.create = function () {
+      this.activity.loader(true);
+      scroll.body().addClass('torrent-list rmedia-online-list');
+      files.appendFiles(scroll.render());
+      filmixSearch(object.movie || object).then(function (found) {
+        return filmixPost(found.id);
+      }).then(function (post) {
+        if (destroyed) return;
+        self.activity.loader(false);
+        appendItems(flattenFilmix(post, object.movie || object));
+      }).catch(function (error) {
+        if (destroyed) return;
+        self.activity.loader(false);
+        showEmpty(error.message || 'Filmix временно недоступен');
+        self.start(true);
+      });
+      return this.render();
+    };
+
+    this.start = function (first) {
+      if (!this.activity || Lampa.Activity.active().activity !== this.activity) return;
+      if (first && !last) last = scroll.render().find('.selector').eq(0)[0];
+      try { Lampa.Background.immediately(Lampa.Utils.cardImgBackground(object.movie || object)); } catch (error) {}
+      Lampa.Controller.add('content', {
+        toggle: function () {
+          Lampa.Controller.collectionSet(scroll.render(), files.render());
+          Lampa.Controller.collectionFocus(last || false, scroll.render());
+        },
+        up: function () { if (Navigator.canmove('up')) Navigator.move('up'); else Lampa.Controller.toggle('head'); },
+        down: function () { Navigator.move('down'); },
+        right: function () { Navigator.move('right'); },
+        left: function () { if (Navigator.canmove('left')) Navigator.move('left'); else Lampa.Controller.toggle('menu'); },
+        back: this.back
+      });
+      Lampa.Controller.toggle('content');
+    };
+    this.back = function () { Lampa.Activity.backward(); };
+    this.pause = function () {};
+    this.stop = function () {};
+    this.render = function () { return files.render(); };
+    this.destroy = function () {
+      destroyed = true;
+      files.destroy();
+      scroll.destroy();
+      entries = [];
+    };
+  }
+
+  function openOnline(movie) {
+    if (onlineLoading) return;
+    onlineLoading = true;
+    setTimeout(function () { onlineLoading = false; }, 700);
+    Lampa.Component.add(ID, RMediaOnlineComponent);
+    Lampa.Activity.push({
+      url: '', title: 'RMEDIA Online', component: ID,
+      search: movie.title || movie.name, movie: movie, page: 1
+    });
+  }
+
+  function registerOnline() {
+    if (window.rmedia_online_component_ready) return;
+    window.rmedia_online_component_ready = true;
+    Lampa.Component.add(ID, RMediaOnlineComponent);
+    var style = '<style id="rmedia-online-style">' +
+      '.rmedia-online-item{position:relative;padding:.65em 1em .65em 3.3em;min-height:3.2em}' +
+      '.rmedia-online-play{position:absolute;left:.65em;top:.55em;width:2em;height:2em}' +
+      '.rmedia-online-play svg{width:100%;height:100%}' +
+      '.rmedia-online-item.focus{background:rgba(255,255,255,.16);border-radius:.35em}' +
+      '</style>';
+    if (!document.getElementById('rmedia-online-style')) $('body').append(style);
+
+    Lampa.Listener.follow('full', function (event) {
+      if (!event || event.type !== 'complite' || !event.data || !event.data.movie) return;
+      if (!get(KEYS.enabled, true) || !String(get(KEYS.filmixToken, ''))) return;
+      var root = event.object.activity.render();
+      if (root.find('.view--rmedia-online').length) return;
+      var button = $('<div class="full-start__button selector view--rmedia-online" data-subtitle="Filmix">' +
+        '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7L8 5z" fill="currentColor"/></svg><span>Online</span></div>');
+      button.on('hover:enter', function () { openOnline(event.data.movie); });
+      var torrent = root.find('.view--torrent');
+      var trailer = root.find('.view--trailer');
+      if (get(KEYS.first, true)) {
+        if (torrent.length) torrent.before(button); else if (trailer.length) trailer.before(button); else root.find('.full-start__buttons').prepend(button);
+      } else {
+        if (torrent.length) torrent.after(button); else root.find('.full-start__buttons').append(button);
+      }
+    });
+  }
+
   function registerManifest() {
     try {
       Lampa.Manifest = Lampa.Manifest || {};
@@ -397,6 +634,7 @@
   function start() {
     if (typeof Lampa === 'undefined') { setTimeout(start, 300); return; }
     registerSettings();
+    registerOnline();
     registerManifest();
     console.log(NAME + ' v' + VERSION + ' loaded');
   }
