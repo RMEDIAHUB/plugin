@@ -3,7 +3,7 @@
  * Безопасное подключение личных аккаунтов Filmix и KinoPub.
  * Токены хранятся только локально в Lampa.Storage.
  *
- * Version: 2.0.0
+ * Version: 2.0.1
  * License: MIT
  */
 (function () {
@@ -14,7 +14,7 @@
 
   var ID = 'rmedia_online';
   var NAME = 'RMEDIA Online';
-  var VERSION = '2.0.0';
+  var VERSION = '2.0.1';
   var FILMIX_API = 'http://filmixapp.cyou/api/v2/';
   var KP_API = 'https://api.srvkp.com/v1/';
   var KP_DEVICE = 'https://api.srvkp.com/oauth2/device';
@@ -155,17 +155,48 @@
       if (!Array.isArray(items) || !items.length) throw new Error('Filmix ничего не нашёл по запросу «' + query + '»');
       var wanted = normalizeTitle(title);
       var year = movieYear(movie);
-      var ranked = items.map(function (item) {
+      var ranked = items.map(function (item, index) {
         var itemTitle = item.title || item.name || '';
         var original = item.orig_title || item.original_title || item.original_name || '';
-        var itemYear = Number(item.year || (item.alt_name && String(item.alt_name).split('-').pop()) || 0);
+        var yearText = item.year || item.date || item.release_date || item.alt_name || '';
+        var yearMatch = String(yearText).match(/(?:19|20)\d{2}/);
+        var itemYear = yearMatch ? Number(yearMatch[0]) : 0;
         var score = 0;
         if (normalizeTitle(itemTitle) === wanted || normalizeTitle(original) === wanted) score += 20;
+        else if (normalizeTitle(itemTitle).indexOf(wanted) !== -1 || normalizeTitle(original).indexOf(wanted) !== -1) score += 8;
         if (year && itemYear === year) score += 10;
         else if (year && itemYear && Math.abs(itemYear - year) <= 1) score += 4;
-        return { item: item, score: score };
-      }).sort(function (a, b) { return b.score - a.score; });
-      return ranked[0].item;
+        return { item: item, score: score, index: index };
+      }).sort(function (a, b) { return b.score - a.score || a.index - b.index; });
+      return ranked.map(function (entry) { return entry.item; });
+    });
+  }
+
+  function hasFilmixLinks(post) {
+    var links = post && post.player_links || {};
+    return !!((links.movie && Object.keys(links.movie).length) ||
+      (links.playlist && Object.keys(links.playlist).length));
+  }
+
+  function filmixResolve(movie) {
+    return filmixSearch(movie).then(function (candidates) {
+      // Filmix search often returns several films with the same translated
+      // title. Try the best matches one by one instead of opening the first
+      // result even when its player_links is empty.
+      var queue = candidates.slice(0, 8);
+      var attempt = function () {
+        var candidate = queue.shift();
+        if (!candidate) throw new Error('Filmix не вернул доступных переводов');
+        var id = candidate.id || candidate.post_id || candidate.filmix_id;
+        if (!id) return attempt();
+        return filmixPost(id).then(function (post) {
+          if (hasFilmixLinks(post)) return post;
+          return attempt();
+        }).catch(function () {
+          return attempt();
+        });
+      };
+      return attempt();
     });
   }
 
@@ -533,9 +564,7 @@
       this.activity.loader(true);
       scroll.body().addClass('torrent-list rmedia-online-list');
       files.appendFiles(scroll.render());
-      filmixSearch(object.movie || object).then(function (found) {
-        return filmixPost(found.id);
-      }).then(function (post) {
+      filmixResolve(object.movie || object).then(function (post) {
         if (destroyed) return;
         self.activity.loader(false);
         appendItems(flattenFilmix(post, object.movie || object));
