@@ -1,23 +1,23 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_player_v2_ready) return;
-    window.rmedia_player_v2_ready = true;
+    if (window.rmedia_player_v3_ready) return;
+    window.rmedia_player_v3_ready = true;
 
     const COMPONENT = 'rmedia_player';
     const ENABLED   = 'rmedia_player_enabled';
     const PLAYER    = 'rmedia_player_type';
 
-    const PLAYERS = {
-        'VLC':       'vlc',
-        'MPC-BE':    'mpc-be',
-        'MPC-HC':    'mpc-hc',
-        'MPC-QT':    'mpc-qt',
-        'KMPlayer':  'kmplayer',
-        'PotPlayer': 'potplayer'
+    const PLAYER_LABELS = {
+        'vlc':       'VLC',
+        'mpc-be':    'MPC-BE',
+        'mpc-hc':    'MPC-HC',
+        'mpc-qt':    'MPC-QT',
+        'kmplayer':  'KMPlayer',
+        'potplayer': 'PotPlayer',
+        'ask':       'Спрашивать каждый раз'
     };
 
-    const ASK = 'Спрашивать каждый раз';
     let bypassOnce = false;
 
     function isWindowsBrowser() {
@@ -45,11 +45,7 @@
         let url = data.url;
 
         try {
-            if (
-                window.Lampa &&
-                Lampa.Torserver &&
-                typeof Lampa.Torserver.toPlayUrl === 'function'
-            ) {
+            if (window.Lampa && Lampa.Torserver && typeof Lampa.Torserver.toPlayUrl === 'function') {
                 url = Lampa.Torserver.toPlayUrl(url);
             }
         } catch (e) {
@@ -65,10 +61,8 @@
         } catch (e) {}
     }
 
-    function openExternal(data, displayName) {
-        const slug = PLAYERS[displayName];
-
-        if (!slug) {
+    function openExternal(data, playerSlug) {
+        if (!PLAYER_LABELS[playerSlug] || playerSlug === 'ask') {
             notify('RMEDIA Player: неизвестный плеер');
             return false;
         }
@@ -80,20 +74,15 @@
             return false;
         }
 
-        const protocolUrl =
-            'rmedia://play/' +
-            encodeURIComponent(slug) +
-            '/' +
-            toBase64Url(url);
+        const protocolUrl = 'rmedia://play/' + encodeURIComponent(playerSlug) + '/' + toBase64Url(url);
 
-        console.log('[RMEDIA Player] Open:', displayName, url);
+        console.log('[RMEDIA Player] Open:', PLAYER_LABELS[playerSlug], url);
         window.location.assign(protocolUrl);
 
         return true;
     }
 
     function playInsideLampa(data) {
-        // Prevent our create handler from intercepting the replay.
         bypassOnce = true;
 
         try {
@@ -117,12 +106,12 @@
         }
 
         const items = [
-            { title: 'VLC',       player: 'VLC' },
-            { title: 'MPC-BE',    player: 'MPC-BE' },
-            { title: 'MPC-HC',    player: 'MPC-HC' },
-            { title: 'MPC-QT',    player: 'MPC-QT' },
-            { title: 'KMPlayer',  player: 'KMPlayer' },
-            { title: 'PotPlayer', player: 'PotPlayer' },
+            { title: 'VLC',       player: 'vlc' },
+            { title: 'MPC-BE',    player: 'mpc-be' },
+            { title: 'MPC-HC',    player: 'mpc-hc' },
+            { title: 'MPC-QT',    player: 'mpc-qt' },
+            { title: 'KMPlayer',  player: 'kmplayer' },
+            { title: 'PotPlayer', player: 'potplayer' },
             { title: 'Встроенный плеер Lampa', inner: true }
         ];
 
@@ -150,20 +139,17 @@
             }
 
             if (!Lampa.Storage.field(ENABLED)) return;
-
-            // Keep YouTube inside Lampa.
             if (/youtube\.com|youtu\.be/i.test(event.data.url)) return;
 
-            const selected = Lampa.Storage.field(PLAYER) || 'VLC';
+            const selected = Lampa.Storage.field(PLAYER) || 'vlc';
 
-            if (selected === ASK) {
-                // Stop the original launch while we show our own picker.
+            if (selected === 'ask') {
                 if (typeof event.abort === 'function') event.abort();
                 showPlayerPicker(event.data);
                 return;
             }
 
-            if (PLAYERS[selected]) {
+            if (PLAYER_LABELS[selected]) {
                 if (typeof event.abort === 'function') event.abort();
                 openExternal(event.data, selected);
             }
@@ -205,12 +191,20 @@
             param: {
                 name: PLAYER,
                 type: 'select',
-                values: 'VLC,MPC-BE,MPC-HC,MPC-QT,KMPlayer,PotPlayer,Спрашивать каждый раз',
-                default: 'VLC'
+                values: {
+                    'vlc':       'VLC',
+                    'mpc-be':    'MPC-BE',
+                    'mpc-hc':    'MPC-HC',
+                    'mpc-qt':    'MPC-QT',
+                    'kmplayer':  'KMPlayer',
+                    'potplayer': 'PotPlayer',
+                    'ask':       'Спрашивать каждый раз'
+                },
+                default: 'vlc'
             },
             field: {
                 name: 'Плеер по умолчанию',
-                description: 'Можно выбрать один плеер или спрашивать при каждом запуске'
+                description: 'Выберите плеер или режим выбора при каждом запуске'
             }
         });
     }
@@ -224,7 +218,7 @@
         addSettings();
         Lampa.Player.listener.follow('create', onCreate);
 
-        console.log('[RMEDIA Player v2] Ready');
+        console.log('[RMEDIA Player v3] Ready');
     }
 
     if (window.appready) {
