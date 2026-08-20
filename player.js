@@ -1,14 +1,15 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_player_v4_ready) return;
-    window.rmedia_player_v4_ready = true;
+    if (window.rmedia_player_v5_ready) return;
+    window.rmedia_player_v5_ready = true;
 
     const COMPONENT = 'rmedia_player';
     const ENABLED   = 'rmedia_player_enabled';
     const PLAYER    = 'rmedia_player_type';
 
     const PLAYER_LABELS = {
+        'inner':     'Встроенный плеер Lampa',
         'vlc':       'VLC',
         'mpc-be':    'MPC-BE',
         'mpc-hc':    'MPC-HC',
@@ -62,11 +63,6 @@
     }
 
     function openExternal(data, playerSlug) {
-        if (!PLAYER_LABELS[playerSlug] || playerSlug === 'ask') {
-            notify('RMEDIA Player: неизвестный плеер');
-            return false;
-        }
-
         const url = getPlayableUrl(data);
 
         if (!url) {
@@ -89,24 +85,28 @@
     function playInsideLampa(data) {
         try {
             /*
-             * Important:
-             * - create was aborted before the picker opened;
-             * - replay the SAME data through Lampa.Player.play();
-             * - bypass our interceptor exactly once;
-             * - force Lampa's own player branch with launch_player = 'inner'.
+             * Do NOT clone torrent play data.
+             * Some torrent integrations may attach properties/functions to the
+             * original object. Reuse the exact original object and only
+             * temporarily force Lampa's native inner-player branch.
              */
             bypassOnce = true;
 
-            const innerData = Object.assign({}, data, {
-                launch_player: 'inner'
-            });
+            const hadLaunchPlayer = Object.prototype.hasOwnProperty.call(data, 'launch_player');
+            const previousLaunchPlayer = data.launch_player;
+
+            data.launch_player = 'inner';
 
             if (Lampa.Player && typeof Lampa.Player.play === 'function') {
-                Lampa.Player.play(innerData);
+                Lampa.Player.play(data);
             } else {
                 bypassOnce = false;
                 notify('Не удалось запустить встроенный плеер Lampa');
             }
+
+            // Player.play/start reads launch_player synchronously.
+            if (hadLaunchPlayer) data.launch_player = previousLaunchPlayer;
+            else delete data.launch_player;
         } catch (e) {
             bypassOnce = false;
             console.error('[RMEDIA Player] Inner player error:', e);
@@ -120,10 +120,6 @@
             return;
         }
 
-        /*
-         * Lampa's own Select patterns restore the previous controller
-         * before continuing playback/action.
-         */
         let enabledController = null;
 
         try {
@@ -142,39 +138,28 @@
                 ) {
                     Lampa.Controller.toggle(enabledController.name);
                 }
-            } catch (e) {
-                console.warn('[RMEDIA Player] Controller restore failed:', e);
-            }
+            } catch (e) {}
         }
-
-        const items = [
-            { title: 'VLC',       player: 'vlc' },
-            { title: 'MPC-BE',    player: 'mpc-be' },
-            { title: 'MPC-HC',    player: 'mpc-hc' },
-            { title: 'MPC-QT',    player: 'mpc-qt' },
-            { title: 'KMPlayer',  player: 'kmplayer' },
-            { title: 'PotPlayer', player: 'potplayer' },
-            { title: 'Встроенный плеер Lampa', inner: true }
-        ];
 
         Lampa.Select.show({
             title: 'Открыть в плеере',
-            items: items,
-
+            items: [
+                { title: 'Встроенный плеер Lampa', player: 'inner' },
+                { title: 'VLC',       player: 'vlc' },
+                { title: 'MPC-BE',    player: 'mpc-be' },
+                { title: 'MPC-HC',    player: 'mpc-hc' },
+                { title: 'MPC-QT',    player: 'mpc-qt' },
+                { title: 'KMPlayer',  player: 'kmplayer' },
+                { title: 'PotPlayer', player: 'potplayer' }
+            ],
             onSelect: function (item) {
                 restoreController();
 
-                if (item.inner) {
-                    playInsideLampa(data);
-                } else {
-                    openExternal(data, item.player);
-                }
+                if (item.player === 'inner') playInsideLampa(data);
+                else openExternal(data, item.player);
             },
-
             onBack: function () {
                 restoreController();
-
-                // Back = stay with Lampa's own player instead of leaving playback dead.
                 playInsideLampa(data);
             }
         });
@@ -194,6 +179,14 @@
             if (/youtube\.com|youtu\.be/i.test(event.data.url)) return;
 
             const selected = Lampa.Storage.field(PLAYER) || 'vlc';
+
+            /*
+             * Critical v5 behavior:
+             * If "Встроенный Lampa" is selected as default, do absolutely
+             * nothing. No abort, no replay, no URL modification.
+             * Lampa follows its original native torrent playback path.
+             */
+            if (selected === 'inner') return;
 
             if (selected === 'ask') {
                 if (typeof event.abort === 'function') event.abort();
@@ -233,8 +226,8 @@
                 default: true
             },
             field: {
-                name: 'Использовать внешний плеер',
-                description: 'Windows: открывать видео из Lampa во внешнем плеере'
+                name: 'Использовать RMEDIA Player',
+                description: 'Выбор встроенного или внешнего плеера на Windows'
             }
         });
 
@@ -244,6 +237,7 @@
                 name: PLAYER,
                 type: 'select',
                 values: {
+                    'inner':     'Встроенный плеер Lampa',
                     'vlc':       'VLC',
                     'mpc-be':    'MPC-BE',
                     'mpc-hc':    'MPC-HC',
@@ -256,21 +250,18 @@
             },
             field: {
                 name: 'Плеер по умолчанию',
-                description: 'Выберите плеер или режим выбора при каждом запуске'
+                description: 'Встроенный режим не вмешивается в штатный запуск Lampa'
             }
         });
     }
 
     function init() {
-        if (!isWindowsBrowser()) {
-            console.log('[RMEDIA Player] Non-Windows browser: inactive');
-            return;
-        }
+        if (!isWindowsBrowser()) return;
 
         addSettings();
         Lampa.Player.listener.follow('create', onCreate);
 
-        console.log('[RMEDIA Player v4] Ready');
+        console.log('[RMEDIA Player v5] Ready');
     }
 
     if (window.appready) {
