@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_player_v3_ready) return;
-    window.rmedia_player_v3_ready = true;
+    if (window.rmedia_player_v4_ready) return;
+    window.rmedia_player_v4_ready = true;
 
     const COMPONENT = 'rmedia_player';
     const ENABLED   = 'rmedia_player_enabled';
@@ -74,7 +74,11 @@
             return false;
         }
 
-        const protocolUrl = 'rmedia://play/' + encodeURIComponent(playerSlug) + '/' + toBase64Url(url);
+        const protocolUrl =
+            'rmedia://play/' +
+            encodeURIComponent(playerSlug) +
+            '/' +
+            toBase64Url(url);
 
         console.log('[RMEDIA Player] Open:', PLAYER_LABELS[playerSlug], url);
         window.location.assign(protocolUrl);
@@ -83,14 +87,25 @@
     }
 
     function playInsideLampa(data) {
-        bypassOnce = true;
-
         try {
+            /*
+             * Important:
+             * - create was aborted before the picker opened;
+             * - replay the SAME data through Lampa.Player.play();
+             * - bypass our interceptor exactly once;
+             * - force Lampa's own player branch with launch_player = 'inner'.
+             */
+            bypassOnce = true;
+
+            const innerData = Object.assign({}, data, {
+                launch_player: 'inner'
+            });
+
             if (Lampa.Player && typeof Lampa.Player.play === 'function') {
-                Lampa.Player.play(data);
+                Lampa.Player.play(innerData);
             } else {
                 bypassOnce = false;
-                notify('Не удалось вернуть встроенный плеер');
+                notify('Не удалось запустить встроенный плеер Lampa');
             }
         } catch (e) {
             bypassOnce = false;
@@ -103,6 +118,33 @@
         if (!Lampa.Select || typeof Lampa.Select.show !== 'function') {
             notify('RMEDIA Player: меню выбора недоступно');
             return;
+        }
+
+        /*
+         * Lampa's own Select patterns restore the previous controller
+         * before continuing playback/action.
+         */
+        let enabledController = null;
+
+        try {
+            if (Lampa.Controller && typeof Lampa.Controller.enabled === 'function') {
+                enabledController = Lampa.Controller.enabled();
+            }
+        } catch (e) {}
+
+        function restoreController() {
+            try {
+                if (
+                    enabledController &&
+                    enabledController.name &&
+                    Lampa.Controller &&
+                    typeof Lampa.Controller.toggle === 'function'
+                ) {
+                    Lampa.Controller.toggle(enabledController.name);
+                }
+            } catch (e) {
+                console.warn('[RMEDIA Player] Controller restore failed:', e);
+            }
         }
 
         const items = [
@@ -118,11 +160,21 @@
         Lampa.Select.show({
             title: 'Открыть в плеере',
             items: items,
+
             onSelect: function (item) {
-                if (item.inner) playInsideLampa(data);
-                else openExternal(data, item.player);
+                restoreController();
+
+                if (item.inner) {
+                    playInsideLampa(data);
+                } else {
+                    openExternal(data, item.player);
+                }
             },
+
             onBack: function () {
+                restoreController();
+
+                // Back = stay with Lampa's own player instead of leaving playback dead.
                 playInsideLampa(data);
             }
         });
@@ -218,7 +270,7 @@
         addSettings();
         Lampa.Player.listener.follow('create', onCreate);
 
-        console.log('[RMEDIA Player v3] Ready');
+        console.log('[RMEDIA Player v4] Ready');
     }
 
     if (window.appready) {
