@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v9_ready) return;
-    window.rmedia_lock_v9_ready = true;
+    if (window.rmedia_lock_v10_ready) return;
+    window.rmedia_lock_v10_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -161,7 +161,7 @@
 
     function bindSecretGesture() {
         function attach() {
-            const candidates = $('.head__time, .time, .head__time-now, .head__clock');
+            const candidates = $('.head__title, .head__time, .time, .head__time-now, .head__clock');
 
             candidates.each(function () {
                 const el = $(this);
@@ -418,7 +418,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v9 Universal UI Lock] Ready');
+        console.log('[RMEDIA Lock v10 Secret Title Tap] Ready');
     }
 
     if (window.appready) {
