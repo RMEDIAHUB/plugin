@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v10_ready) return;
-    window.rmedia_lock_v10_ready = true;
+    if (window.rmedia_lock_v11_1_ready) return;
+    window.rmedia_lock_v11_1_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -398,8 +398,164 @@
         });
     }
 
+
+    // ===== RMEDIA REMOTE CONTROL v11 =====
+    const REMOTE_API = 'http://178.105.179.72:8787';
+    const REMOTE_ID_KEY = 'rmedia_remote_client_id';
+    const REMOTE_KEY_KEY = 'rmedia_remote_client_key';
+    const REMOTE_CACHE_KEY = 'rmedia_remote_last_status';
+    const REMOTE_CACHE_TIME_KEY = 'rmedia_remote_last_ok_at';
+    const REMOTE_GRACE_MS = 24 * 60 * 60 * 1000;
+
+    let remoteOverlay = null;
+    let remoteTimer = null;
+
+    function remoteGet(name, fallback) {
+        try {
+            const v = Lampa.Storage.get(name, fallback);
+            return v == null ? fallback : v;
+        } catch(e) {
+            try {
+                const v = localStorage.getItem(name);
+                return v == null ? fallback : v;
+            } catch(e2) { return fallback; }
+        }
+    }
+
+    function remoteSet(name, value) {
+        try { Lampa.Storage.set(name, value); return; } catch(e) {}
+        try { localStorage.setItem(name, value); } catch(e2) {}
+    }
+
+    function remoteClientId(){ return String(remoteGet(REMOTE_ID_KEY,'') || '').trim(); }
+    function remoteClientKey(){ return String(remoteGet(REMOTE_KEY_KEY,'') || '').trim(); }
+
+    function removeRemoteOverlay() {
+        if (remoteOverlay) {
+            remoteOverlay.remove();
+            remoteOverlay = null;
+        }
+    }
+
+    function showRemoteOverlay(status, message) {
+        if (!remoteOverlay) {
+            remoteOverlay = $('<div class="rmedia-remote-lock"></div>');
+            remoteOverlay.css({
+                position:'fixed', inset:'0', zIndex:'999999',
+                background:'#090909', color:'#fff',
+                display:'flex', alignItems:'center', justifyContent:'center',
+                padding:'28px', textAlign:'center'
+            });
+            $('body').append(remoteOverlay);
+        }
+
+        const title = status === 'pending' ? 'Ожидаем подтверждение оплаты'
+                    : status === 'expired' ? 'Срок доступа закончился'
+                    : 'Доступ временно приостановлен';
+
+        remoteOverlay.html(
+            '<div style="max-width:720px">' +
+              '<div style="font-size:42px;font-weight:700;margin-bottom:18px">RMEDIAHUB</div>' +
+              '<div style="font-size:28px;margin-bottom:12px">'+title+'</div>' +
+              '<div style="font-size:20px;opacity:.75">'+(message || '')+'</div>' +
+              '<div style="font-size:16px;opacity:.45;margin-top:26px">Для связи: @rmediahub</div>' +
+            '</div>'
+        );
+
+        try { Lampa.Controller.toggle('content'); } catch(e) {}
+    }
+
+    function applyRemoteStatus(data) {
+        if (!data || !data.status) return;
+
+        remoteSet(REMOTE_CACHE_KEY, JSON.stringify(data));
+        remoteSet(REMOTE_CACHE_TIME_KEY, String(Date.now()));
+
+        if (data.status === 'active') removeRemoteOverlay();
+        else showRemoteOverlay(data.status, data.message || '');
+    }
+
+    async function checkRemoteStatus() {
+        const id = remoteClientId();
+        const key = remoteClientKey();
+
+        // Пока клиент не привязан — не блокируем. Привязку делает админ.
+        if (!id || !key) return;
+
+        const url = REMOTE_API + '/v1/client/status?id=' +
+                    encodeURIComponent(id) + '&key=' + encodeURIComponent(key) +
+                    '&_=' + Date.now();
+
+        try {
+            const r = await fetch(url, {cache:'no-store'});
+            if (!r.ok) throw new Error('HTTP '+r.status);
+            const data = await r.json();
+            applyRemoteStatus(data);
+        } catch(e) {
+            console.warn('[RMEDIA Remote] status check failed', e);
+
+            // Last-known-blocked stays blocked.
+            let cached = null;
+            try { cached = JSON.parse(remoteGet(REMOTE_CACHE_KEY,'null')); } catch(e2) {}
+
+            if (cached && cached.status && cached.status !== 'active') {
+                showRemoteOverlay(cached.status, cached.message || '');
+                return;
+            }
+
+            // Active clients get 24h grace during backend outage.
+            const last = parseInt(remoteGet(REMOTE_CACHE_TIME_KEY,'0'), 10) || 0;
+            if (cached && cached.status === 'active' && (Date.now() - last) <= REMOTE_GRACE_MS) {
+                removeRemoteOverlay();
+                return;
+            }
+
+            // After grace expires, verification is required.
+            if (cached && cached.status === 'active' && last) {
+                showRemoteOverlay('blocked', 'Не удалось подтвердить статус доступа. Повторите позже.');
+            }
+        }
+    }
+
+    function addRemoteAdminSettings() {
+        if (!window.Lampa || !Lampa.SettingsApi) return;
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
+            param: { name: REMOTE_ID_KEY, type: 'input', default: '' },
+            field: {
+                name: 'RMEDIA Client ID',
+                description: 'Например RM-1A2B3C4D'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
+            param: { name: REMOTE_KEY_KEY, type: 'input', default: '' },
+            field: {
+                name: 'RMEDIA Client Key',
+                description: 'Секретный ключ клиента из панели RMEDIA Control'
+            }
+        });
+    }
+
+    function initRemoteControl() {
+        addRemoteAdminSettings();
+        checkRemoteStatus();
+
+        if (remoteTimer) clearInterval(remoteTimer);
+        remoteTimer = setInterval(checkRemoteStatus, 60 * 1000);
+
+        // Re-check when app returns to foreground / tab.
+        document.addEventListener('visibilitychange', function(){
+            if (!document.hidden) checkRemoteStatus();
+        });
+    }
+    // ===== /RMEDIA REMOTE CONTROL v11 =====
+
     function init() {
         addAdminSettings();
+        initRemoteControl();
         addClientSyncMenu();
         watchSettings();
         hideRestrictedUI();
@@ -418,7 +574,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v10 Secret Title Tap] Ready');
+        console.log('[RMEDIA Lock v11.1 Remote Control] Ready');
     }
 
     if (window.appready) {
