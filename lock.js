@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v6_ready) return;
-    window.rmedia_lock_v6_ready = true;
+    if (window.rmedia_lock_v7_ready) return;
+    window.rmedia_lock_v7_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -11,7 +11,6 @@
 
     let taps = [];
     let unlocked = false;
-
     let safeSyncOpening = false;
     let safeSyncAccountReached = false;
     let syncButtonAdded = false;
@@ -67,25 +66,54 @@
         $(restrictedSelectors()).show();
     }
 
-    function hideTorrServerAds(body) {
+    /*
+     * Safe TorrServer promo removal.
+     * v6 hid .ad-server globally inside the server component and on this build
+     * that class wraps much more than the promo, so the whole panel vanished.
+     *
+     * v7 NEVER hides .ad-server itself.
+     * It finds only the smallest element whose OWN text contains tsarea.tv
+     * and hides that small promo fragment plus a nearby QR container if present.
+     */
+    function hideTorrPromo(body) {
         if (!body || !body.length) return;
 
-        /*
-         * TorrServer settings may contain a promotional/QR block.
-         * Hide only ad-like blocks inside the currently opened server component.
-         */
-        body.find('.ad-server').hide();
+        let promoLeafs = body.find('*').filter(function () {
+            const el = $(this);
 
-        body.find('*').filter(function () {
-            const text = ($(this).text() || '').trim();
-            return /tsarea\.tv/i.test(text) || /аренда TorrServer/i.test(text);
-        }).each(function () {
-            const node = $(this);
+            // Own text only, excluding descendants.
+            let own = '';
+            el.contents().each(function () {
+                if (this.nodeType === 3) own += this.nodeValue || '';
+            });
 
-            // Prefer the nearest visually grouped block instead of hiding huge ancestors.
-            const block = node.closest('.ad-server, .settings-param, .settings-param__body, .settings-param__content, .selector');
-            if (block.length) block.hide();
-            else node.hide();
+            return /tsarea\.tv/i.test(own) || /аренда\s+TorrServer/i.test(own);
+        });
+
+        promoLeafs.each(function () {
+            const leaf = $(this);
+
+            // Hide only the tiny text-bearing element.
+            leaf.hide();
+
+            // Try to hide QR that lives in the same small visual wrapper,
+            // but never climb above a single immediate parent.
+            const parent = leaf.parent();
+
+            if (parent.length) {
+                parent.find('img, canvas, .qrcode, .qr-code, .ad-server__qr').hide();
+
+                // If parent is clearly a tiny promo-only box, hide it.
+                // Avoid settings component/body/container ancestors.
+                const cls = String(parent.attr('class') || '');
+                const safeParent =
+                    !/settings__body|settings-component|settings__content|scroll|ad-server\b/.test(cls) &&
+                    parent.children().length <= 6;
+
+                if (safeParent && /tsarea\.tv/i.test(parent.text() || '')) {
+                    parent.hide();
+                }
+            }
         });
     }
 
@@ -226,9 +254,7 @@
             if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
                 Lampa.Controller.toggle('content');
             }
-        } catch (e) {
-            console.error('[RMEDIA Lock] exitSafeSync:', e);
-        }
+        } catch (e) {}
 
         hideRestrictedUI();
     }
@@ -246,21 +272,10 @@
                 try {
                     if (Lampa.Settings && typeof Lampa.Settings.create === 'function') {
                         Lampa.Settings.create('account');
-                    } else {
-                        safeSyncOpening = false;
-                        if (Lampa.Noty && Lampa.Noty.show) {
-                            Lampa.Noty.show('Не удалось открыть синхронизацию');
-                        }
                     }
-                } catch (err) {
-                    safeSyncOpening = false;
-                    console.error('[RMEDIA Lock] openSafeSync:', err);
-                }
+                } catch (err) {}
             }, 80);
-        } catch (e) {
-            safeSyncOpening = false;
-            console.error('[RMEDIA Lock] openSafeSync:', e);
-        }
+        } catch (e) {}
     }
 
     function addClientSyncMenu() {
@@ -287,15 +302,10 @@
         try {
             if (Lampa.Settings && Lampa.Settings.listener && Lampa.Settings.listener.follow) {
                 Lampa.Settings.listener.follow('open', function (e) {
-                    // Remove TorrServer promo even in admin mode.
                     if (e && e.name === 'server') {
-                        setTimeout(function () {
-                            hideTorrServerAds(e.body);
-                        }, 0);
-
-                        setTimeout(function () {
-                            hideTorrServerAds(e.body);
-                        }, 120);
+                        setTimeout(function () { hideTorrPromo(e.body); }, 0);
+                        setTimeout(function () { hideTorrPromo(e.body); }, 150);
+                        setTimeout(function () { hideTorrPromo(e.body); }, 500);
                     }
 
                     if (!safeSyncOpening || unlocked) return;
@@ -303,14 +313,8 @@
                     if (e.name === 'account') {
                         safeSyncAccountReached = true;
 
-                        setTimeout(function () {
-                            pruneAccountPanel(e.body);
-                        }, 0);
-
-                        setTimeout(function () {
-                            pruneAccountPanel(e.body);
-                        }, 100);
-
+                        setTimeout(function () { pruneAccountPanel(e.body); }, 0);
+                        setTimeout(function () { pruneAccountPanel(e.body); }, 100);
                         return;
                     }
 
@@ -382,15 +386,9 @@
         setInterval(function () {
             addClientSyncMenu();
             hideRestrictedUI();
-
-            // Fallback for cases when settings component is already on screen.
-            const settingsBody = $('.settings__body');
-            if (settingsBody.length && /tsarea\.tv/i.test(settingsBody.text() || '')) {
-                hideTorrServerAds(settingsBody);
-            }
         }, 1000);
 
-        console.log('[RMEDIA Lock v6 No TorrServer Ads] Ready');
+        console.log('[RMEDIA Lock v7 Torr Ad Safe Fix] Ready');
     }
 
     if (window.appready) {
