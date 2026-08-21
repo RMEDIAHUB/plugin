@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v8_ready) return;
-    window.rmedia_lock_v8_ready = true;
+    if (window.rmedia_lock_v9_ready) return;
+    window.rmedia_lock_v9_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -50,7 +50,8 @@
             '.menu__item[data-action="edit"]',
             '.open--extensions',
             '.open--plugins',
-            '.settings--shortcut'
+            '.settings--shortcut',
+            '.navigation-bar__item[data-action="settings"]'
         ].join(',');
     }
 
@@ -188,7 +189,7 @@
     function protectAdminClicks() {
         $(document).on(
             'click.rmedia-lock hover:enter.rmedia-lock',
-            '.open--settings, .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"]',
+            '.open--settings, .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
             function (e) {
                 if (!isEnabled() || unlocked) return;
 
@@ -417,7 +418,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v8 Extensions PIN] Ready');
+        console.log('[RMEDIA Lock v9 Universal UI Lock] Ready');
     }
 
     if (window.appready) {
