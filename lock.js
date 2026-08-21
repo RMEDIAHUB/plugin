@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_10_ready) return;
-    window.rmedia_lock_v11_10_ready = true;
+    if (window.rmedia_lock_v11_11_ready) return;
+    window.rmedia_lock_v11_11_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -53,6 +53,9 @@
             '.menu__item[data-action="edit"]',
             '.open--extensions',
             '.open--plugins',
+            '.open--profile',
+            '.open--console',
+            '.head__action[data-action="console"]',
             '.settings--shortcut',
             '.navigation-bar__item[data-action="settings"]'
         ].join(',');
@@ -219,7 +222,7 @@
     function protectAdminClicks() {
         $(document).on(
             'click.rmedia-lock hover:enter.rmedia-lock',
-            '.open--settings, .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
+            '.open--settings, .open--profile, .open--console, .head__action[data-action="console"], .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
             function (e) {
                 if (!isEnabled() || unlocked) return;
 
@@ -715,7 +718,42 @@
     }
     // ===== /RMEDIA REMOTE CONTROL v11 =====
 
+    function installIphoneFullCardFix() {
+        if (document.getElementById('rmedia-iphone-full-fix')) return;
+
+        const ua = navigator.userAgent || '';
+        const isiOS =
+            /iPhone|iPad|iPod/i.test(ua) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+        if (!isiOS) return;
+
+        const style = document.createElement('style');
+        style.id = 'rmedia-iphone-full-fix';
+        style.textContent = `
+            @media screen and (max-width: 700px) {
+                /* Lampa mobile full-card reserves a square poster (100% width).
+                   On tall iPhone screens this leaves a large empty block below
+                   the action buttons. Use a 16:9 hero reserve instead. */
+                .full-start-new__poster {
+                    padding-bottom: 56.25% !important;
+                }
+
+                .full-start-new {
+                    padding-bottom: 1.25em !important;
+                }
+
+                .full-start-new__left {
+                    min-height: 0 !important;
+                }
+            }
+        `;
+
+        document.head.appendChild(style);
+    }
+
     function init() {
+        installIphoneFullCardFix();
         addAdminSettings();
         initRemoteControl();
         addClientSyncMenu();
@@ -739,7 +777,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.10 Wrong PIN Safe Exit] Ready');
+        console.log('[RMEDIA Lock v11.11 iPhone Layout + Client Head Cleanup] Ready');
     }
 
     if (window.appready) {
