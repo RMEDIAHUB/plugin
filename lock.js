@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_17_ready) return;
-    window.rmedia_lock_v11_17_ready = true;
+    if (window.rmedia_lock_v11_18_ready) return;
+    window.rmedia_lock_v11_18_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -512,7 +512,7 @@
                 e.stopImmediatePropagation();
             }
 
-            askPin(function () {
+            askMenuPin(function () {
                 try {
                     Lampa.Extensions.show();
                 } catch (err) {
@@ -1150,7 +1150,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.17 Android Head + Menu PIN Fix] Ready');
+        console.log('[RMEDIA Lock v11.18 Extensions Menu PIN] Ready');
     }
 
     if (window.appready) {
