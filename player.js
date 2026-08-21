@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_player_v7_1_ready) return;
-    window.rmedia_player_v7_1_ready = true;
+    if (window.rmedia_player_v7_2_ready) return;
+    window.rmedia_player_v7_2_ready = true;
 
     const COMPONENT = 'rmedia_player';
     const ENABLED   = 'rmedia_player_enabled';
@@ -28,8 +28,13 @@
 
     function isIOS() {
         const ua = navigator.userAgent || '';
+        const platform = navigator.platform || '';
+        const touch = navigator.maxTouchPoints || 0;
+
         return /iPhone|iPad|iPod/i.test(ua) ||
-            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+            (/Macintosh|MacIntel/i.test(ua + ' ' + platform) && touch > 1) ||
+            (/iPad/i.test(platform)) ||
+            (touch > 1 && /Safari/i.test(ua) && !/Windows|Android/i.test(ua));
     }
 
     let iosSelectPatched = false;
@@ -168,12 +173,136 @@
         Lampa.Select.show.__rmedia_ios_picker = true;
 
         iosSelectPatched = true;
-        console.log('[RMEDIA Player v7.1] iOS torrent long-press player menu enabled');
+        console.log('[RMEDIA Player v7.2] iOS torrent long-press player menu enabled');
+    }
+
+    let torrentRowsListenerBound = false;
+
+    function normalizeIOSPlatform() {
+        if (!isIOS() || !window.Lampa || !Lampa.Storage) return;
+
+        try {
+            const current = Lampa.Storage.get('platform', '');
+
+            /*
+             * Some iPad Safari user-agents expose themselves differently and
+             * Lampa can leave platform empty. Without platform='apple',
+             * Player.start() never enters the iOS external-player branch.
+             */
+            if (current !== 'apple' && current !== 'apple_tv') {
+                Lampa.Storage.set('platform', 'apple');
+                $('body')
+                    .removeClass('platform--noname platform--browser')
+                    .addClass('platform--apple');
+            }
+        } catch (e) {
+            console.warn('[RMEDIA Player v7.2] iOS platform normalize failed:', e);
+        }
+    }
+
+    function showIOSPlayerPicker(row) {
+        if (!row || !row.length || !window.Lampa || !Lampa.Select) return;
+
+        const enabled = Lampa.Controller && Lampa.Controller.enabled
+            ? Lampa.Controller.enabled()
+            : null;
+
+        const current = (Lampa.Storage && Lampa.Storage.field('player_torrent')) || 'vlc';
+
+        const items = IOS_PLAYERS.map(function (p) {
+            return {
+                title: p.title + (current === p.value ? ' ✓' : ''),
+                value: p.value,
+                runas: p.runas || p.value
+            };
+        });
+
+        Lampa.Select.show({
+            title: 'Открыть торрент в плеере',
+            items: items,
+
+            onBack: function () {
+                if (enabled && enabled.name && Lampa.Controller) {
+                    Lampa.Controller.toggle(enabled.name);
+                }
+            },
+
+            onSelect: function (item) {
+                if (!item || !item.value) return;
+
+                try {
+                    Lampa.Storage.set('player_torrent', item.value);
+                } catch (e) {}
+
+                if (enabled && enabled.name && Lampa.Controller) {
+                    Lampa.Controller.toggle(enabled.name);
+                }
+
+                /*
+                 * Reuse Lampa's normal torrent-file enter flow. For external
+                 * players Player.runas() sets a one-shot launch override.
+                 */
+                try {
+                    if (Lampa.Player && typeof Lampa.Player.runas === 'function') {
+                        Lampa.Player.runas(item.runas);
+                    }
+                } catch (e) {}
+
+                setTimeout(function () {
+                    row.trigger('hover:enter');
+                }, 40);
+            }
+        });
+    }
+
+    function patchTorrentRowsDirect() {
+        if (!isIOS() || !window.Lampa || !Lampa.Listener || torrentRowsListenerBound) return;
+
+        torrentRowsListenerBound = true;
+
+        Lampa.Listener.follow('torrent_file', function (event) {
+            if (!event || event.type !== 'list_open') return;
+
+            /*
+             * torrent_file:list_open fires before rows are fully appended.
+             * Bind after render. We remove only Lampa's hover:long handler;
+             * short hover:enter stays untouched.
+             */
+            [80, 250, 600].forEach(function (delay) {
+                setTimeout(function () {
+                    $('.torrent-files .torrent-file, .torrent-files .torrent-serial').each(function () {
+                        const row = $(this);
+
+                        if (row.attr('data-rmedia-ios-long') === '1') return;
+
+                        row.attr('data-rmedia-ios-long', '1');
+
+                        row.off('hover:long');
+
+                        row.on('hover:long.rmedia-ios-player', function (e) {
+                            if (e) {
+                                try {
+                                    e.preventDefault();
+                                    e.stopImmediatePropagation();
+                                } catch (err) {}
+                            }
+
+                            showIOSPlayerPicker(row);
+                            return false;
+                        });
+                    });
+                }, delay);
+            });
+        });
+
+        console.log('[RMEDIA Player v7.2] direct iOS torrent-row long-press patch enabled');
     }
 
     function configureIOS() {
         if (!isIOS() || !window.Lampa || !Lampa.Storage) return;
 
+        normalizeIOSPlatform();
+        patchTorrentRowsDirect();
         patchIOSTorrentLongPress();
 
         try {
@@ -190,9 +319,9 @@
                 Lampa.Storage.set('player_torrent', 'vlc');
             }
 
-            console.log('[RMEDIA Player v7.1] iOS: torrent default VLC + long-press player picker; online unchanged');
+            console.log('[RMEDIA Player v7.2] iOS: torrent default VLC + long-press player picker; online unchanged');
         } catch (e) {
-            console.warn('[RMEDIA Player v7.1] iOS setup failed:', e);
+            console.warn('[RMEDIA Player v7.2] iOS setup failed:', e);
         }
     }
 
@@ -444,7 +573,7 @@
         addSettings();
         Lampa.Player.listener.follow('create', onCreate);
 
-        console.log('[RMEDIA Player v7.1] Windows bridge ready');
+        console.log('[RMEDIA Player v7.2] Windows bridge ready');
     }
 
     if (window.appready) {
