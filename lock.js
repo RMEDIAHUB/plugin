@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v7_ready) return;
-    window.rmedia_lock_v7_ready = true;
+    if (window.rmedia_lock_v8_ready) return;
+    window.rmedia_lock_v8_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -14,6 +14,7 @@
     let safeSyncOpening = false;
     let safeSyncAccountReached = false;
     let syncButtonAdded = false;
+    let extensionGateBound = false;
 
     function storageGet(name, fallback) {
         try {
@@ -49,11 +50,7 @@
             '.menu__item[data-action="edit"]',
             '.open--extensions',
             '.open--plugins',
-            '.settings--shortcut',
-            '[data-component="plugins"]',
-            '[data-component="extensions"]',
-            '[data-name="plugins"]',
-            '[data-name="extensions"]'
+            '.settings--shortcut'
         ].join(',');
     }
 
@@ -66,23 +63,13 @@
         $(restrictedSelectors()).show();
     }
 
-    /*
-     * Safe TorrServer promo removal.
-     * v6 hid .ad-server globally inside the server component and on this build
-     * that class wraps much more than the promo, so the whole panel vanished.
-     *
-     * v7 NEVER hides .ad-server itself.
-     * It finds only the smallest element whose OWN text contains tsarea.tv
-     * and hides that small promo fragment plus a nearby QR container if present.
-     */
     function hideTorrPromo(body) {
         if (!body || !body.length) return;
 
-        let promoLeafs = body.find('*').filter(function () {
+        const promoLeafs = body.find('*').filter(function () {
             const el = $(this);
-
-            // Own text only, excluding descendants.
             let own = '';
+
             el.contents().each(function () {
                 if (this.nodeType === 3) own += this.nodeValue || '';
             });
@@ -92,19 +79,13 @@
 
         promoLeafs.each(function () {
             const leaf = $(this);
-
-            // Hide only the tiny text-bearing element.
             leaf.hide();
 
-            // Try to hide QR that lives in the same small visual wrapper,
-            // but never climb above a single immediate parent.
             const parent = leaf.parent();
 
             if (parent.length) {
                 parent.find('img, canvas, .qrcode, .qr-code, .ad-server__qr').hide();
 
-                // If parent is clearly a tiny promo-only box, hide it.
-                // Avoid settings component/body/container ancestors.
                 const cls = String(parent.attr('class') || '');
                 const safeParent =
                     !/settings__body|settings-component|settings__content|scroll|ad-server\b/.test(cls) &&
@@ -146,8 +127,9 @@
                 nosave: true,
                 nomic: true
             }, function (value) {
-                if (String(value || '').trim() === expected) onSuccess();
-                else {
+                if (String(value || '').trim() === expected) {
+                    onSuccess();
+                } else {
                     try {
                         if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Неверный PIN');
                     } catch (e) {}
@@ -194,6 +176,7 @@
         const observer = new MutationObserver(function () {
             attach();
             hideRestrictedUI();
+            bindExtensionsGate();
         });
 
         observer.observe(document.body, {
@@ -225,6 +208,41 @@
                 return false;
             }
         );
+    }
+
+    function bindExtensionsGate() {
+        if (!window.Lampa || !Lampa.Settings || !Lampa.Extensions) return;
+
+        const item = Lampa.Settings.main().render().find('[data-component="plugins"]');
+        if (!item.length) return;
+
+        /*
+         * Native Lampa binds this row to Extensions.show().
+         * Replace that handler with our PIN gate.
+         */
+        item.unbind('hover:enter.rmedia-extpin');
+        item.unbind('hover:enter');
+
+        item.on('hover:enter.rmedia-extpin', function (e) {
+            if (e) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+            }
+
+            askPin(function () {
+                try {
+                    Lampa.Extensions.show();
+                } catch (err) {
+                    try {
+                        if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Не удалось открыть Расширения');
+                    } catch (e2) {}
+                }
+            });
+
+            return false;
+        });
+
+        extensionGateBound = true;
     }
 
     function pruneAccountPanel(body) {
@@ -302,6 +320,11 @@
         try {
             if (Lampa.Settings && Lampa.Settings.listener && Lampa.Settings.listener.follow) {
                 Lampa.Settings.listener.follow('open', function (e) {
+                    if (e && e.name === 'main') {
+                        setTimeout(bindExtensionsGate, 0);
+                        setTimeout(bindExtensionsGate, 120);
+                    }
+
                     if (e && e.name === 'server') {
                         setTimeout(function () { hideTorrPromo(e.body); }, 0);
                         setTimeout(function () { hideTorrPromo(e.body); }, 150);
@@ -312,7 +335,6 @@
 
                     if (e.name === 'account') {
                         safeSyncAccountReached = true;
-
                         setTimeout(function () { pruneAccountPanel(e.body); }, 0);
                         setTimeout(function () { pruneAccountPanel(e.body); }, 100);
                         return;
@@ -370,7 +392,7 @@
             },
             field: {
                 name: 'PIN администратора',
-                description: '5 быстрых кликов по часам → PIN'
+                description: 'Используется и для входа в Расширения'
             }
         });
     }
@@ -383,12 +405,19 @@
         bindSecretGesture();
         protectAdminClicks();
 
+        setTimeout(bindExtensionsGate, 300);
+        setTimeout(bindExtensionsGate, 1000);
+
         setInterval(function () {
             addClientSyncMenu();
             hideRestrictedUI();
+
+            if (!extensionGateBound || $('.settings__body').length) {
+                bindExtensionsGate();
+            }
         }, 1000);
 
-        console.log('[RMEDIA Lock v7 Torr Ad Safe Fix] Ready');
+        console.log('[RMEDIA Lock v8 Extensions PIN] Ready');
     }
 
     if (window.appready) {
