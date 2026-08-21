@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_11_ready) return;
-    window.rmedia_lock_v11_11_ready = true;
+    if (window.rmedia_lock_v11_12_ready) return;
+    window.rmedia_lock_v11_12_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -55,7 +55,9 @@
             '.open--plugins',
             '.open--profile',
             '.open--console',
+            '.open--terminal',
             '.head__action[data-action="console"]',
+            '.head__action[data-action="terminal"]',
             '.settings--shortcut',
             '.navigation-bar__item[data-action="settings"]'
         ].join(',');
@@ -222,7 +224,7 @@
     function protectAdminClicks() {
         $(document).on(
             'click.rmedia-lock hover:enter.rmedia-lock',
-            '.open--settings, .open--profile, .open--console, .head__action[data-action="console"], .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
+            '.open--settings, .open--profile, .open--console, .open--terminal, .head__action[data-action="console"], .head__action[data-action="terminal"], .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
             function (e) {
                 if (!isEnabled() || unlocked) return;
 
@@ -718,43 +720,59 @@
     }
     // ===== /RMEDIA REMOTE CONTROL v11 =====
 
-    function installIphoneFullCardFix() {
-        if (document.getElementById('rmedia-iphone-full-fix')) return;
+    function hideClientHeadExtras() {
+        if (unlocked) return;
 
-        const ua = navigator.userAgent || '';
-        const isiOS =
-            /iPhone|iPad|iPod/i.test(ua) ||
-            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        try {
+            $('.open--profile, .open--console, .open--terminal, .head__action[data-action="console"], .head__action[data-action="terminal"]').hide();
 
-        if (!isiOS) return;
+            $('.head__action').each(function () {
+                const el = $(this);
+                if (el.attr('data-rmedia-sync-head') === '1') return;
 
-        const style = document.createElement('style');
-        style.id = 'rmedia-iphone-full-fix';
-        style.textContent = `
-            @media screen and (max-width: 700px) {
-                /* Lampa mobile full-card reserves a square poster (100% width).
-                   On tall iPhone screens this leaves a large empty block below
-                   the action buttons. Use a 16:9 hero reserve instead. */
-                .full-start-new__poster {
-                    padding-bottom: 56.25% !important;
+                const fingerprint = [
+                    el.attr('class') || '',
+                    el.attr('title') || '',
+                    el.attr('data-action') || '',
+                    el.html() || ''
+                ].join(' ').toLowerCase();
+
+                if (
+                    fingerprint.indexOf('console') >= 0 ||
+                    fingerprint.indexOf('terminal') >= 0 ||
+                    fingerprint.indexOf('sprite-console') >= 0 ||
+                    fingerprint.indexOf('sprite-terminal') >= 0
+                ) {
+                    el.hide();
                 }
+            });
+        } catch (e) {}
+    }
 
-                .full-start-new {
-                    padding-bottom: 1.25em !important;
-                }
+    function guardConsoleController() {
+        if (!window.Lampa || !Lampa.Controller || Lampa.Controller.__rmedia_console_guard) return;
 
-                .full-start-new__left {
-                    min-height: 0 !important;
-                }
+        const originalToggle = Lampa.Controller.toggle.bind(Lampa.Controller);
+
+        Lampa.Controller.toggle = function (name) {
+            if (!unlocked && (name === 'console' || name === 'console-tabs' || name === 'console-body')) {
+                try {
+                    hideClientHeadExtras();
+                    Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Недоступно в клиентском режиме');
+                } catch (e) {}
+                return;
             }
-        `;
 
-        document.head.appendChild(style);
+            return originalToggle.apply(null, arguments);
+        };
+
+        Lampa.Controller.__rmedia_console_guard = true;
     }
 
     function init() {
-        installIphoneFullCardFix();
         addAdminSettings();
+        guardConsoleController();
+        hideClientHeadExtras();
         initRemoteControl();
         addClientSyncMenu();
         addClientSyncHead();
@@ -771,13 +789,14 @@
             addClientSyncMenu();
             addClientSyncHead();
             hideRestrictedUI();
+            hideClientHeadExtras();
 
             if (!extensionGateBound || $('.settings__body').length) {
                 bindExtensionsGate();
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.11 iPhone Layout + Client Head Cleanup] Ready');
+        console.log('[RMEDIA Lock v11.12 Header Cleanup Stable] Ready');
     }
 
     if (window.appready) {
