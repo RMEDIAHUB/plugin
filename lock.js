@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_12_ready) return;
-    window.rmedia_lock_v11_12_ready = true;
+    if (window.rmedia_lock_v11_13_ready) return;
+    window.rmedia_lock_v11_13_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -769,7 +769,87 @@
         Lampa.Controller.__rmedia_console_guard = true;
     }
 
+    function installIphoneCardLayout() {
+        if (document.getElementById('rmedia-iphone-card-layout')) return;
+
+        const ua = navigator.userAgent || '';
+        const isiOS =
+            /iPhone|iPad|iPod/i.test(ua) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+        if (!isiOS) return;
+
+        const style = document.createElement('style');
+        style.id = 'rmedia-iphone-card-layout';
+        style.textContent = `
+            @media screen and (max-width: 700px) {
+                /* iPhone: показываем постер отдельной карточкой,
+                   а весь текст и кнопки — НИЖЕ, без наложения. */
+
+                .full-start-new__body {
+                    display: block !important;
+                }
+
+                .full-start-new__left {
+                    width: 58vw !important;
+                    max-width: 240px !important;
+                    min-width: 180px !important;
+                    margin: 0 auto 1.4em !important;
+                }
+
+                .full-start-new__poster {
+                    padding-bottom: 150% !important;
+                    background: transparent !important;
+                    border-radius: 1.2em !important;
+                    overflow: hidden !important;
+                }
+
+                .full-start-new__img {
+                    width: 100% !important;
+                    height: 100% !important;
+                    object-fit: cover !important;
+                    transform: none !important;
+                    border-radius: 1.2em !important;
+                    opacity: 1 !important;
+                }
+
+                .full-start-new__right {
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    position: static !important;
+                    z-index: auto !important;
+                    background: none !important;
+                    border-radius: 0 !important;
+                    overflow: visible !important;
+                }
+
+                .full-start-new__head,
+                .full-start-new__title,
+                .full-start-new__tagline,
+                .full-start-new__rate-line,
+                .full-start-new__details,
+                .full-start-new__reactions,
+                .full-start-new__buttons {
+                    position: static !important;
+                }
+
+                .full-start-new__title {
+                    -webkit-line-clamp: 3 !important;
+                    line-clamp: 3 !important;
+                    margin-top: 0 !important;
+                }
+
+                .full-start-new {
+                    padding-bottom: 1.5em !important;
+                }
+            }
+        `;
+
+        document.head.appendChild(style);
+    }
+
     function init() {
+        installIphoneCardLayout();
         addAdminSettings();
         guardConsoleController();
         hideClientHeadExtras();
@@ -796,7 +876,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.12 Header Cleanup Stable] Ready');
+        console.log('[RMEDIA Lock v11.13 iPhone Card Layout] Ready');
     }
 
     if (window.appready) {
