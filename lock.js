@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_ready) return;
-    window.rmedia_lock_ready = true;
+    if (window.rmedia_lock_v2_ready) return;
+    window.rmedia_lock_v2_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -27,22 +27,8 @@
         }
     }
 
-    function storageSet(name, value) {
-        try {
-            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.set === 'function') {
-                Lampa.Storage.set(name, value);
-                return;
-            }
-        } catch (e) {}
-
-        try {
-            localStorage.setItem(name, value);
-        } catch (e) {}
-    }
-
     function isEnabled() {
-        const value = storageGet(ENABLED_KEY, 'true');
-        return String(value) !== 'false';
+        return String(storageGet(ENABLED_KEY, 'true')) !== 'false';
     }
 
     function getPin() {
@@ -51,25 +37,46 @@
         return pin;
     }
 
+    function restrictedSelectors() {
+        return [
+            // Top header gear
+            '.open--settings',
+
+            // Side-menu administrative items
+            '.menu__item[data-action="settings"]',
+            '.menu__item[data-action="about"]',
+            '.menu__item[data-action="console"]',
+            '.menu__item[data-action="edit"]',
+
+            // Plugin/extension shortcuts that may be added by other plugins
+            '.open--extensions',
+            '.open--plugins',
+            '.settings--shortcut',
+            '[data-component="plugins"]',
+            '[data-component="extensions"]',
+            '[data-name="plugins"]',
+            '[data-name="extensions"]'
+        ].join(',');
+    }
+
     function hideRestrictedUI() {
         if (!isEnabled() || unlocked) return;
-
-        $('.open--settings').hide();
-        $('[data-component="plugins"], [data-component="extensions"]').hide();
-        $('[data-name="plugins"], [data-name="extensions"]').hide();
-        $('.settings--shortcut, .open--extensions, .open--plugins').hide();
+        $(restrictedSelectors()).hide();
     }
 
     function showRestrictedUI() {
-        $('.open--settings').show();
-        $('[data-component="plugins"], [data-component="extensions"]').show();
-        $('[data-name="plugins"], [data-name="extensions"]').show();
-        $('.settings--shortcut, .open--extensions, .open--plugins').show();
+        $(restrictedSelectors()).show();
     }
 
     function lockNow() {
         unlocked = false;
         hideRestrictedUI();
+
+        try {
+            if (Lampa.Noty && Lampa.Noty.show) {
+                Lampa.Noty.show('RMEDIA: настройки заблокированы');
+            }
+        } catch (e) {}
     }
 
     function unlockNow() {
@@ -77,8 +84,8 @@
         showRestrictedUI();
 
         try {
-            if (window.Lampa && Lampa.Noty && Lampa.Noty.show) {
-                Lampa.Noty.show('RMEDIA: настройки разблокированы до перезапуска');
+            if (Lampa.Noty && Lampa.Noty.show) {
+                Lampa.Noty.show('RMEDIA: админ-режим до перезапуска');
             }
         } catch (e) {}
     }
@@ -120,14 +127,8 @@
         if (taps.length >= SECRET_TAPS) {
             taps = [];
 
-            if (unlocked) {
-                lockNow();
-                try {
-                    if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('RMEDIA: настройки заблокированы');
-                } catch (e) {}
-            } else {
-                askPin(unlockNow);
-            }
+            if (unlocked) lockNow();
+            else askPin(unlockNow);
         }
     }
 
@@ -141,9 +142,7 @@
                 if (el.data('rmedia-lock-bound')) return;
                 el.data('rmedia-lock-bound', true);
 
-                el.on('click.rmedia-lock', function () {
-                    secretTap();
-                });
+                el.on('click.rmedia-lock', secretTap);
             });
         }
 
@@ -160,25 +159,29 @@
         });
     }
 
-    function protectSettingsOpen() {
-        $(document).on('click.rmedia-lock', '.open--settings', function (e) {
-            if (!isEnabled() || unlocked) return;
+    function protectClicks() {
+        $(document).on(
+            'click.rmedia-lock hover:enter.rmedia-lock',
+            '.open--settings, .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"]',
+            function (e) {
+                if (!isEnabled() || unlocked) return;
 
-            e.preventDefault();
-            e.stopImmediatePropagation();
+                e.preventDefault();
+                e.stopImmediatePropagation();
 
-            askPin(function () {
-                unlockNow();
+                askPin(function () {
+                    unlockNow();
 
-                try {
-                    if (window.Lampa && Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
-                        Lampa.Controller.toggle('settings');
-                    }
-                } catch (err) {}
-            });
+                    try {
+                        if (window.Lampa && Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                            Lampa.Controller.toggle('settings');
+                        }
+                    } catch (err) {}
+                });
 
-            return false;
-        });
+                return false;
+            }
+        );
     }
 
     function addAdminSettings() {
@@ -201,8 +204,8 @@
                 default: true
             },
             field: {
-                name: 'Скрывать настройки',
-                description: 'Скрывает шестерёнку и защищает вход PIN-кодом'
+                name: 'Клиентский режим',
+                description: 'Скрывает Настройки, Информацию, Консоль и Редактор меню'
             }
         });
 
@@ -215,7 +218,7 @@
             },
             field: {
                 name: 'PIN администратора',
-                description: '4–8 цифр. По умолчанию: 2580'
+                description: '5 быстрых кликов по часам → PIN'
             }
         });
     }
@@ -224,19 +227,12 @@
         addAdminSettings();
         hideRestrictedUI();
         bindSecretGesture();
-        protectSettingsOpen();
+        protectClicks();
 
-        setInterval(hideRestrictedUI, 1500);
+        // Menu/header may be redrawn after plugins or CUB sync.
+        setInterval(hideRestrictedUI, 1000);
 
-        try {
-            if (Lampa.Storage && Lampa.Storage.listener && Lampa.Storage.listener.follow) {
-                Lampa.Storage.listener.follow('change', function (e) {
-                    if (e.name === ENABLED_KEY) hideRestrictedUI();
-                });
-            }
-        } catch (e) {}
-
-        console.log('[RMEDIA Lock] Ready');
+        console.log('[RMEDIA Lock v2] Ready');
     }
 
     if (window.appready) {
