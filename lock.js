@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_1_ready) return;
-    window.rmedia_lock_v11_1_ready = true;
+    if (window.rmedia_lock_v11_2_ready) return;
+    window.rmedia_lock_v11_2_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -389,6 +389,7 @@
             param: {
                 name: PIN_KEY,
                 type: 'input',
+                values: '',
                 default: '2580'
             },
             field: {
@@ -522,7 +523,7 @@
 
         Lampa.SettingsApi.addParam({
             component: 'rmedia_lock',
-            param: { name: REMOTE_ID_KEY, type: 'input', default: '' },
+            param: { name: REMOTE_ID_KEY, type: 'input', values: '', default: '' },
             field: {
                 name: 'RMEDIA Client ID',
                 description: 'Например RM-1A2B3C4D'
@@ -531,7 +532,7 @@
 
         Lampa.SettingsApi.addParam({
             component: 'rmedia_lock',
-            param: { name: REMOTE_KEY_KEY, type: 'input', default: '' },
+            param: { name: REMOTE_KEY_KEY, type: 'input', values: '', default: '' },
             field: {
                 name: 'RMEDIA Client Key',
                 description: 'Секретный ключ клиента из панели RMEDIA Control'
@@ -574,7 +575,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.1 Remote Control] Ready');
+        console.log('[RMEDIA Lock v11.2 Input Fix] Ready');
     }
 
     if (window.appready) {
