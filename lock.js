@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v3_ready) return;
-    window.rmedia_lock_v3_ready = true;
+    if (window.rmedia_lock_v4_ready) return;
+    window.rmedia_lock_v4_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -70,9 +70,7 @@
         hideRestrictedUI();
 
         try {
-            if (Lampa.Noty && Lampa.Noty.show) {
-                Lampa.Noty.show('RMEDIA: клиентский режим');
-            }
+            if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('RMEDIA: клиентский режим');
         } catch (e) {}
     }
 
@@ -81,9 +79,7 @@
         showRestrictedUI();
 
         try {
-            if (Lampa.Noty && Lampa.Noty.show) {
-                Lampa.Noty.show('RMEDIA: админ-режим до перезапуска');
-            }
+            if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('RMEDIA: админ-режим до перезапуска');
         } catch (e) {}
     }
 
@@ -98,9 +94,8 @@
                 nosave: true,
                 nomic: true
             }, function (value) {
-                if (String(value || '').trim() === expected) {
-                    onSuccess();
-                } else {
+                if (String(value || '').trim() === expected) onSuccess();
+                else {
                     try {
                         if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Неверный PIN');
                     } catch (e) {}
@@ -181,74 +176,60 @@
     }
 
     function pruneAccountPanel(body) {
-        if (!safeSyncOpening || unlocked) return;
+        if (!safeSyncOpening || unlocked || !body || !body.length) return;
 
-        /*
-         * The native CUB account panel has these signed-in actions:
-         * .settings--account-user-sync
-         * .settings--account-user-backup
-         * .settings--account-user-info
-         * .settings--account-user-profile
-         * .settings--account-user-out
-         *
-         * Client view keeps only Sync + Backup.
-         * If the device is not signed in yet, the native Sign In block remains
-         * so the account can be connected during initial setup.
-         */
-        const signedBlock = body.find('.settings--account-user');
+        // Keep only native "Синхронизировать" and "Бэкап" while signed in.
+        body.find('.settings--account-user-info').hide();
+        body.find('.settings--account-user-profile').hide();
+        body.find('.settings--account-user-out').hide();
 
-        if (signedBlock.length) {
-            signedBlock.children().each(function () {
-                const row = $(this);
+        body.find('.settings--account-user-sync').show();
+        body.find('.settings--account-user-backup').show();
 
-                if (
-                    row.hasClass('settings--account-user-sync') ||
-                    row.hasClass('settings--account-user-backup')
-                ) {
-                    return;
-                }
-
-                row.hide();
-            });
-
-            body.find('.settings--account-user-info').hide();
-            body.find('.settings--account-user-profile').hide();
-            body.find('.settings--account-user-out').hide();
-
-            body.find('.settings--account-user-sync').show();
-            body.find('.settings--account-user-backup').show();
-        }
-
-        // Hide CUB promo/header and generic account controls in client mode.
+        // Hide CUB advertising/header/QR and generic sync toggle.
         body.find('.ad-server').hide();
         body.find('[data-name="account_use"]').hide();
         body.find('.settings-param__label').hide();
 
-        // Keep sign-in visible only when account is not signed in.
+        // If not signed in, native sign-in row must remain available.
         body.find('.settings--account-signin').not('.hide').show();
-
-        // Keep our mode until the component is left; this also survives Settings.update().
-        setTimeout(function () {
-            if (safeSyncOpening && !unlocked) pruneAccountPanel(body);
-        }, 50);
     }
 
     function openSafeSync() {
         safeSyncOpening = true;
 
         try {
-            if (Lampa.Settings && typeof Lampa.Settings.create === 'function') {
-                Lampa.Settings.create('account');
-                return;
-            }
-        } catch (e) {}
-
-        // Fallback through global settings controller/API.
-        try {
+            /*
+             * Correct sequence:
+             * 1) Open normal Settings controller so settings HTML/body is attached.
+             * 2) Then open native account component.
+             *
+             * Calling Settings.create('account') directly while Menu is active can
+             * produce no visible result because the settings container is not opened yet.
+             */
             if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
                 Lampa.Controller.toggle('settings');
             }
-        } catch (e) {}
+
+            setTimeout(function () {
+                try {
+                    if (Lampa.Settings && typeof Lampa.Settings.create === 'function') {
+                        Lampa.Settings.create('account');
+                    } else {
+                        safeSyncOpening = false;
+                        if (Lampa.Noty && Lampa.Noty.show) {
+                            Lampa.Noty.show('Не удалось открыть синхронизацию');
+                        }
+                    }
+                } catch (err) {
+                    safeSyncOpening = false;
+                    console.error('[RMEDIA Lock] openSafeSync:', err);
+                }
+            }, 80);
+        } catch (e) {
+            safeSyncOpening = false;
+            console.error('[RMEDIA Lock] openSafeSync:', e);
+        }
     }
 
     function addClientSyncMenu() {
@@ -279,8 +260,11 @@
                         setTimeout(function () {
                             pruneAccountPanel(e.body);
                         }, 0);
-                    }
-                    else if (e.name !== 'account') {
+
+                        setTimeout(function () {
+                            pruneAccountPanel(e.body);
+                        }, 100);
+                    } else if (e.name !== 'main' && e.name !== 'account') {
                         safeSyncOpening = false;
                     }
                 });
@@ -344,7 +328,7 @@
             hideRestrictedUI();
         }, 1000);
 
-        console.log('[RMEDIA Lock v3 Client Sync] Ready');
+        console.log('[RMEDIA Lock v4 Client Sync Fix] Ready');
     }
 
     if (window.appready) {
