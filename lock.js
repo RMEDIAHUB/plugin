@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_13_ready) return;
-    window.rmedia_lock_v11_13_ready = true;
+    if (window.rmedia_lock_v11_14_ready) return;
+    window.rmedia_lock_v11_14_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -16,6 +16,8 @@
     let syncButtonAdded = false;
     let syncHeadAdded = false;
     let extensionGateBound = false;
+    let protectedComponentsBound = false;
+    let mobileBackBound = false;
     let remoteUpPresses = [];
     let suppressNextSyncEnter = false;
 
@@ -246,6 +248,138 @@
         );
     }
 
+    function isProtectedSettingsFolder(item) {
+        if (!item || !item.length) return false;
+
+        const component = String(item.attr('data-component') || '').toLowerCase();
+        const title = String(item.find('.settings-folder__name').text() || item.text() || '').trim().toLowerCase();
+
+        if (component === 'rmedia_lock') return true;
+        if (title.indexOf('rmedia lock') >= 0) return true;
+
+        // Filmix component name can differ between plugin versions,
+        // so protect both by component id fingerprint and visible title.
+        if (component.indexOf('filmix') >= 0) return true;
+        if (title === 'filmix' || title.indexOf('filmix') >= 0) return true;
+
+        return false;
+    }
+
+    function bindProtectedComponentsGate() {
+        if (!window.Lampa || !Lampa.Settings || !Lampa.Settings.main) return;
+
+        let root;
+
+        try {
+            root = Lampa.Settings.main().render();
+        } catch (e) {
+            root = $('.settings__body');
+        }
+
+        if (!root || !root.length) return;
+
+        root.find('.settings-folder').each(function () {
+            const item = $(this);
+            if (!isProtectedSettingsFolder(item)) return;
+
+            if (item.attr('data-rmedia-protected') === '1') return;
+            item.attr('data-rmedia-protected', '1');
+
+            const component = item.attr('data-component');
+
+            // Settings.main() binds its own hover:enter, so replace only
+            // this protected row with our PIN gate.
+            item.off('hover:enter');
+
+            item.on('hover:enter.rmedia-protected', function (e) {
+                if (!isEnabled()) {
+                    if (component && Lampa.Settings && typeof Lampa.Settings.create === 'function') {
+                        Lampa.Settings.create(component);
+                    }
+                    return;
+                }
+
+                if (e) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                }
+
+                askPin(function () {
+                    try {
+                        if (component && Lampa.Settings && typeof Lampa.Settings.create === 'function') {
+                            Lampa.Settings.create(component);
+                        }
+                    } catch (err) {}
+                });
+
+                return false;
+            });
+
+            // Touch Safari can dispatch click in addition to hover:enter.
+            item.off('click.rmedia-protected').on('click.rmedia-protected', function (e) {
+                if (!isEnabled()) return;
+
+                e.preventDefault();
+                e.stopImmediatePropagation();
+
+                askPin(function () {
+                    try {
+                        if (component && Lampa.Settings && typeof Lampa.Settings.create === 'function') {
+                            Lampa.Settings.create(component);
+                        }
+                    } catch (err) {}
+                });
+
+                return false;
+            });
+        });
+
+        protectedComponentsBound = true;
+    }
+
+    function closeSettingsToContent() {
+        safeSyncOpening = false;
+        safeSyncAccountReached = false;
+
+        try {
+            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                Lampa.Controller.toggle('content');
+            }
+        } catch (e) {}
+
+        setTimeout(function () {
+            try {
+                $('body').removeClass('settings--open');
+                if (Lampa.Settings && Lampa.Settings.render) {
+                    Lampa.Settings.render().removeClass('animate animate-down');
+                }
+                hideRestrictedUI();
+                hideClientHeadExtras();
+            } catch (e) {}
+        }, 0);
+    }
+
+    function bindMobileSettingsBackFix() {
+        if (mobileBackBound) return;
+        mobileBackBound = true;
+
+        $(document).on(
+            'click.rmedia-mobileback hover:enter.rmedia-mobileback',
+            '.navigation-bar__item[data-action="back"]',
+            function (e) {
+                if (!$('body').hasClass('settings--open')) return;
+
+                if (e) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                }
+
+                closeSettingsToContent();
+                return false;
+            }
+        );
+    }
+
     function bindExtensionsGate() {
         if (!window.Lampa || !Lampa.Settings || !Lampa.Extensions) return;
 
@@ -432,6 +566,10 @@
                     if (e && e.name === 'main') {
                         setTimeout(bindExtensionsGate, 0);
                         setTimeout(bindExtensionsGate, 120);
+
+                        setTimeout(bindProtectedComponentsGate, 0);
+                        setTimeout(bindProtectedComponentsGate, 120);
+                        setTimeout(bindProtectedComponentsGate, 350);
                     }
 
                     if (e && e.name === 'server') {
@@ -861,9 +999,13 @@
         hideRestrictedUI();
         bindSecretGesture();
         protectAdminClicks();
+        bindMobileSettingsBackFix();
 
         setTimeout(bindExtensionsGate, 300);
         setTimeout(bindExtensionsGate, 1000);
+
+        setTimeout(bindProtectedComponentsGate, 300);
+        setTimeout(bindProtectedComponentsGate, 1000);
 
         setInterval(function () {
             addClientSyncMenu();
@@ -874,9 +1016,13 @@
             if (!extensionGateBound || $('.settings__body').length) {
                 bindExtensionsGate();
             }
+
+            if (!protectedComponentsBound || $('.settings__body').length) {
+                bindProtectedComponentsGate();
+            }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.13 iPhone Card Layout] Ready');
+        console.log('[RMEDIA Lock v11.14 Protected Components + Mobile Back Fix] Ready');
     }
 
     if (window.appready) {
