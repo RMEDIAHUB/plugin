@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v2_ready) return;
-    window.rmedia_lock_v2_ready = true;
+    if (window.rmedia_lock_v3_ready) return;
+    window.rmedia_lock_v3_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -11,6 +11,8 @@
 
     let taps = [];
     let unlocked = false;
+    let safeSyncOpening = false;
+    let syncButtonAdded = false;
 
     function storageGet(name, fallback) {
         try {
@@ -39,16 +41,11 @@
 
     function restrictedSelectors() {
         return [
-            // Top header gear
             '.open--settings',
-
-            // Side-menu administrative items
             '.menu__item[data-action="settings"]',
             '.menu__item[data-action="about"]',
             '.menu__item[data-action="console"]',
             '.menu__item[data-action="edit"]',
-
-            // Plugin/extension shortcuts that may be added by other plugins
             '.open--extensions',
             '.open--plugins',
             '.settings--shortcut',
@@ -74,7 +71,7 @@
 
         try {
             if (Lampa.Noty && Lampa.Noty.show) {
-                Lampa.Noty.show('RMEDIA: настройки заблокированы');
+                Lampa.Noty.show('RMEDIA: клиентский режим');
             }
         } catch (e) {}
     }
@@ -141,7 +138,6 @@
 
                 if (el.data('rmedia-lock-bound')) return;
                 el.data('rmedia-lock-bound', true);
-
                 el.on('click.rmedia-lock', secretTap);
             });
         }
@@ -159,7 +155,7 @@
         });
     }
 
-    function protectClicks() {
+    function protectAdminClicks() {
         $(document).on(
             'click.rmedia-lock hover:enter.rmedia-lock',
             '.open--settings, .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"]',
@@ -173,7 +169,7 @@
                     unlockNow();
 
                     try {
-                        if (window.Lampa && Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                        if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
                             Lampa.Controller.toggle('settings');
                         }
                     } catch (err) {}
@@ -182,6 +178,118 @@
                 return false;
             }
         );
+    }
+
+    function pruneAccountPanel(body) {
+        if (!safeSyncOpening || unlocked) return;
+
+        /*
+         * The native CUB account panel has these signed-in actions:
+         * .settings--account-user-sync
+         * .settings--account-user-backup
+         * .settings--account-user-info
+         * .settings--account-user-profile
+         * .settings--account-user-out
+         *
+         * Client view keeps only Sync + Backup.
+         * If the device is not signed in yet, the native Sign In block remains
+         * so the account can be connected during initial setup.
+         */
+        const signedBlock = body.find('.settings--account-user');
+
+        if (signedBlock.length) {
+            signedBlock.children().each(function () {
+                const row = $(this);
+
+                if (
+                    row.hasClass('settings--account-user-sync') ||
+                    row.hasClass('settings--account-user-backup')
+                ) {
+                    return;
+                }
+
+                row.hide();
+            });
+
+            body.find('.settings--account-user-info').hide();
+            body.find('.settings--account-user-profile').hide();
+            body.find('.settings--account-user-out').hide();
+
+            body.find('.settings--account-user-sync').show();
+            body.find('.settings--account-user-backup').show();
+        }
+
+        // Hide CUB promo/header and generic account controls in client mode.
+        body.find('.ad-server').hide();
+        body.find('[data-name="account_use"]').hide();
+        body.find('.settings-param__label').hide();
+
+        // Keep sign-in visible only when account is not signed in.
+        body.find('.settings--account-signin').not('.hide').show();
+
+        // Keep our mode until the component is left; this also survives Settings.update().
+        setTimeout(function () {
+            if (safeSyncOpening && !unlocked) pruneAccountPanel(body);
+        }, 50);
+    }
+
+    function openSafeSync() {
+        safeSyncOpening = true;
+
+        try {
+            if (Lampa.Settings && typeof Lampa.Settings.create === 'function') {
+                Lampa.Settings.create('account');
+                return;
+            }
+        } catch (e) {}
+
+        // Fallback through global settings controller/API.
+        try {
+            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                Lampa.Controller.toggle('settings');
+            }
+        } catch (e) {}
+    }
+
+    function addClientSyncMenu() {
+        if (syncButtonAdded || !window.Lampa || !Lampa.Menu || typeof Lampa.Menu.addButton !== 'function') return;
+
+        const icon =
+            '<svg viewBox="0 0 24 24">' +
+            '<path fill="currentColor" d="M12 4a8 8 0 0 1 7.45 5.1l1.85-.62-2.58 4.3-4.32-2.55 1.95-.65A4.8 4.8 0 0 0 12 7.2a4.79 4.79 0 0 0-4.15 2.4L5.08 8A8 8 0 0 1 12 4Zm-7.45 10.9-1.85.62 2.58-4.3 4.32 2.55-1.95.65A4.8 4.8 0 0 0 12 16.8a4.79 4.79 0 0 0 4.15-2.4L18.92 16A8 8 0 0 1 12 20a8 8 0 0 1-7.45-5.1Z"/>' +
+            '</svg>';
+
+        const button = Lampa.Menu.addButton(icon, 'Синхронизация', function () {
+            openSafeSync();
+        });
+
+        if (button && button.attr) {
+            button.attr('data-action', 'rmedia_sync');
+            button.addClass('rmedia-sync-menu');
+        }
+
+        syncButtonAdded = true;
+    }
+
+    function watchSettings() {
+        try {
+            if (Lampa.Settings && Lampa.Settings.listener && Lampa.Settings.listener.follow) {
+                Lampa.Settings.listener.follow('open', function (e) {
+                    if (e.name === 'account' && safeSyncOpening && !unlocked) {
+                        setTimeout(function () {
+                            pruneAccountPanel(e.body);
+                        }, 0);
+                    }
+                    else if (e.name !== 'account') {
+                        safeSyncOpening = false;
+                    }
+                });
+
+                Lampa.Settings.listener.follow('close', function () {
+                    safeSyncOpening = false;
+                });
+            }
+        } catch (e) {}
     }
 
     function addAdminSettings() {
@@ -205,7 +313,7 @@
             },
             field: {
                 name: 'Клиентский режим',
-                description: 'Скрывает Настройки, Информацию, Консоль и Редактор меню'
+                description: 'Скрывает административные пункты и оставляет безопасную синхронизацию'
             }
         });
 
@@ -225,14 +333,18 @@
 
     function init() {
         addAdminSettings();
+        addClientSyncMenu();
+        watchSettings();
         hideRestrictedUI();
         bindSecretGesture();
-        protectClicks();
+        protectAdminClicks();
 
-        // Menu/header may be redrawn after plugins or CUB sync.
-        setInterval(hideRestrictedUI, 1000);
+        setInterval(function () {
+            addClientSyncMenu();
+            hideRestrictedUI();
+        }, 1000);
 
-        console.log('[RMEDIA Lock v2] Ready');
+        console.log('[RMEDIA Lock v3 Client Sync] Ready');
     }
 
     if (window.appready) {
