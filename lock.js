@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_15_ready) return;
-    window.rmedia_lock_v11_15_ready = true;
+    if (window.rmedia_lock_v11_15_1_ready) return;
+    window.rmedia_lock_v11_15_1_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -42,14 +42,14 @@
     }
 
     function getPin() {
-        let pin = String(storageGet(PIN_KEY, '2580') || '2580').trim();
-        if (!/^\d{4,8}$/.test(pin)) pin = '2580';
+        let pin = String(storageGet(PIN_KEY, '1111') || '1111').trim();
+        if (!/^\d{4,8}$/.test(pin)) pin = '1111';
         return pin;
     }
 
     function getMenuPin() {
-        let pin = String(storageGet(MENU_PIN_KEY, '1111') || '1111').trim();
-        if (!/^\d{4,8}$/.test(pin)) pin = '1111';
+        let pin = String(storageGet(MENU_PIN_KEY, '2580') || '2580').trim();
+        if (!/^\d{4,8}$/.test(pin)) pin = '2580';
         return pin;
     }
 
@@ -1089,7 +1089,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.15 Dual PIN + Android Menu Fix] Ready');
+        console.log('[RMEDIA Lock v11.15.1 PIN Defaults Swapped] Ready');
     }
 
     if (window.appready) {
