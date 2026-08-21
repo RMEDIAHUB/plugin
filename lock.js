@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_5_ready) return;
-    window.rmedia_lock_v11_5_ready = true;
+    if (window.rmedia_lock_v11_6_ready) return;
+    window.rmedia_lock_v11_6_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -265,6 +265,31 @@
         body.find('.settings--account-signin').not('.hide').show();
     }
 
+    function focusSafeSync(body) {
+        if (!safeSyncOpening || unlocked || !body || !body.length) return;
+
+        try {
+            const sync = body.find('.settings--account-user-sync:visible').first();
+            const backup = body.find('.settings--account-user-backup:visible').first();
+
+            // На ТВ после скрытия лишних пунктов старая коллекция Navigator
+            // всё ещё может содержать скрытые элементы. Пересобираем её только
+            // из реально видимых selector'ов и сразу ставим фокус на Sync.
+            if (Lampa.Controller && typeof Lampa.Controller.collectionSet === 'function') {
+                Lampa.Controller.collectionSet(body, false, true);
+            }
+
+            let target = sync.length ? sync : backup;
+
+            if (target && target.length &&
+                Lampa.Controller && typeof Lampa.Controller.collectionFocus === 'function') {
+                Lampa.Controller.collectionFocus(target, body, true);
+            }
+        } catch (err) {
+            console.warn('[RMEDIA Lock] TV safe sync focus failed', err);
+        }
+    }
+
     function exitSafeSync() {
         safeSyncOpening = false;
         safeSyncAccountReached = false;
@@ -410,8 +435,21 @@
 
                     if (e.name === 'account') {
                         safeSyncAccountReached = true;
-                        setTimeout(function () { pruneAccountPanel(e.body); }, 0);
-                        setTimeout(function () { pruneAccountPanel(e.body); }, 100);
+
+                        setTimeout(function () {
+                            pruneAccountPanel(e.body);
+                            focusSafeSync(e.body);
+                        }, 0);
+
+                        setTimeout(function () {
+                            pruneAccountPanel(e.body);
+                            focusSafeSync(e.body);
+                        }, 120);
+
+                        setTimeout(function () {
+                            focusSafeSync(e.body);
+                        }, 350);
+
                         return;
                     }
 
@@ -697,7 +735,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.5 TV Remote Fix] Ready');
+        console.log('[RMEDIA Lock v11.6 TV Focus Fix] Ready');
     }
 
     if (window.appready) {
