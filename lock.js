@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_16_ready) return;
-    window.rmedia_lock_v11_16_ready = true;
+    if (window.rmedia_lock_v11_17_ready) return;
+    window.rmedia_lock_v11_17_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -128,6 +128,25 @@
     function unlockNow() {
         unlocked = true;
         showRestrictedUI();
+
+        /*
+         * Settings/Profile icons were hidden while Head collection was built.
+         * On Android simply showing them is not enough: Navigator still uses
+         * the old collection and skips Settings. Re-toggle Head so Lampa
+         * rebuilds collectionSet() from currently visible selectors.
+         */
+        setTimeout(function () {
+            try {
+                const enabled = Lampa.Controller && Lampa.Controller.enabled
+                    ? Lampa.Controller.enabled()
+                    : null;
+
+                if (enabled && enabled.name === 'head' &&
+                    Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                    Lampa.Controller.toggle('head');
+                }
+            } catch (e) {}
+        }, 80);
 
         try {
             if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('RMEDIA: админ-режим до перезапуска');
@@ -383,13 +402,16 @@
             const item = $(this);
             if (!isProtectedSettingsFolder(item)) return;
 
-            if (item.attr('data-rmedia-protected') === '1') return;
             item.attr('data-rmedia-protected', '1');
 
             const component = item.attr('data-component');
 
-            // Settings.main() binds its own hover:enter, so replace only
-            // this protected row with our PIN gate.
+            /*
+             * DO NOT skip already-marked rows.
+             * Lampa Settings Main.update() re-binds native hover:enter every
+             * time the main settings screen is opened. Therefore our PIN gate
+             * must replace that native handler again on every pass.
+             */
             item.off('hover:enter');
 
             item.on('hover:enter.rmedia-protected', function (e) {
@@ -661,6 +683,7 @@
                         setTimeout(bindProtectedComponentsGate, 0);
                         setTimeout(bindProtectedComponentsGate, 120);
                         setTimeout(bindProtectedComponentsGate, 350);
+                        setTimeout(bindProtectedComponentsGate, 700);
                     }
 
                     if (e && e.name === 'server') {
@@ -1122,12 +1145,12 @@
                 bindExtensionsGate();
             }
 
-            if (!protectedComponentsBound || $('.settings__body').length) {
+            if ($('body').hasClass('settings--open') || $('.settings__body').length) {
                 bindProtectedComponentsGate();
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.16 Android PIN Controller Restore] Ready');
+        console.log('[RMEDIA Lock v11.17 Android Head + Menu PIN Fix] Ready');
     }
 
     if (window.appready) {
