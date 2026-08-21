@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_player_v7_ready) return;
-    window.rmedia_player_v7_ready = true;
+    if (window.rmedia_player_v7_1_ready) return;
+    window.rmedia_player_v7_1_ready = true;
 
     const COMPONENT = 'rmedia_player';
     const ENABLED   = 'rmedia_player_enabled';
@@ -51,18 +51,56 @@
 
         let hasTimeAction = false;
         let hasLampaRun = false;
+        let titleFingerprint = '';
 
         options.items.forEach(function (item) {
             if (!item) return;
+
             if (item.timeclear || item.timefull) hasTimeAction = true;
             if (item.player === 'lampa') hasLampaRun = true;
+
+            titleFingerprint += ' ' + String(item.title || '').toLowerCase();
         });
 
-        return hasTimeAction && hasLampaRun;
+        /*
+         * Public/minified Lampa builds and plugins may alter the object shape,
+         * so additionally detect the native torrent action menu by visible text.
+         */
+        const hasResetText =
+            titleFingerprint.indexOf('сбросить тайм') >= 0 ||
+            titleFingerprint.indexOf('reset time') >= 0;
+
+        const hasViewedText =
+            titleFingerprint.indexOf('просмотрено') >= 0 ||
+            titleFingerprint.indexOf('viewed') >= 0;
+
+        const hasLampaText =
+            titleFingerprint.indexOf('lampa') >= 0 &&
+            (
+                titleFingerprint.indexOf('плеер') >= 0 ||
+                titleFingerprint.indexOf('player') >= 0
+            );
+
+        const menuTitle = String(options.title || '').toLowerCase();
+        const looksLikeActionTitle =
+            menuTitle.indexOf('действ') >= 0 ||
+            menuTitle.indexOf('action') >= 0 ||
+            !menuTitle;
+
+        return looksLikeActionTitle &&
+            (
+                (hasTimeAction && hasLampaRun) ||
+                ((hasResetText || hasViewedText) && hasLampaText)
+            );
     }
 
     function patchIOSTorrentLongPress() {
-        if (!isIOS() || iosSelectPatched || !window.Lampa || !Lampa.Select || typeof Lampa.Select.show !== 'function') return;
+        if (!isIOS() || !window.Lampa || !Lampa.Select || typeof Lampa.Select.show !== 'function') return;
+
+        if (Lampa.Select.show.__rmedia_ios_picker) {
+            iosSelectPatched = true;
+            return;
+        }
 
         const originalShow = Lampa.Select.show.bind(Lampa.Select);
 
@@ -127,8 +165,10 @@
             });
         };
 
+        Lampa.Select.show.__rmedia_ios_picker = true;
+
         iosSelectPatched = true;
-        console.log('[RMEDIA Player v7] iOS torrent long-press player menu enabled');
+        console.log('[RMEDIA Player v7.1] iOS torrent long-press player menu enabled');
     }
 
     function configureIOS() {
@@ -150,9 +190,9 @@
                 Lampa.Storage.set('player_torrent', 'vlc');
             }
 
-            console.log('[RMEDIA Player v7] iOS: torrent default VLC + long-press player picker; online unchanged');
+            console.log('[RMEDIA Player v7.1] iOS: torrent default VLC + long-press player picker; online unchanged');
         } catch (e) {
-            console.warn('[RMEDIA Player v7] iOS setup failed:', e);
+            console.warn('[RMEDIA Player v7.1] iOS setup failed:', e);
         }
     }
 
@@ -391,8 +431,10 @@
 
             // CUB/settings sync may restore an older player_torrent value
             // shortly after startup, so re-apply a few times.
-            setTimeout(configureIOS, 1000);
+            setTimeout(configureIOS, 500);
+            setTimeout(configureIOS, 1500);
             setTimeout(configureIOS, 4000);
+            setTimeout(configureIOS, 8000);
 
             return;
         }
@@ -402,7 +444,7 @@
         addSettings();
         Lampa.Player.listener.follow('create', onCreate);
 
-        console.log('[RMEDIA Player v7] Windows bridge ready');
+        console.log('[RMEDIA Player v7.1] Windows bridge ready');
     }
 
     if (window.appready) {
