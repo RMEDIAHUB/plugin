@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_9_ready) return;
-    window.rmedia_lock_v11_9_ready = true;
+    if (window.rmedia_lock_v11_10_ready) return;
+    window.rmedia_lock_v11_10_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -17,6 +17,7 @@
     let syncHeadAdded = false;
     let extensionGateBound = false;
     let remoteUpPresses = [];
+    let suppressNextSyncEnter = false;
 
     function storageGet(name, fallback) {
         try {
@@ -119,6 +120,35 @@
         } catch (e) {}
     }
 
+    function denyPinAndExit() {
+        unlocked = false;
+        safeSyncOpening = false;
+        safeSyncAccountReached = false;
+
+        try {
+            hideRestrictedUI();
+        } catch (e) {}
+
+        try {
+            // Закрываем любые Settings/Select/Modal состояния,
+            // чтобы после неверного PIN Back не мог показать админ-меню.
+            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                Lampa.Controller.toggle('content');
+            }
+        } catch (e) {}
+
+        setTimeout(function () {
+            try {
+                $('body').removeClass('settings--open selectbox--open');
+                hideRestrictedUI();
+            } catch (e) {}
+        }, 50);
+
+        try {
+            if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Неверный PIN');
+        } catch (e) {}
+    }
+
     function askPin(onSuccess) {
         const expected = getPin();
 
@@ -133,9 +163,7 @@
                 if (String(value || '').trim() === expected) {
                     onSuccess();
                 } else {
-                    try {
-                        if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Неверный PIN');
-                    } catch (e) {}
+                    denyPinAndExit();
                 }
             });
             return;
@@ -145,7 +173,7 @@
         if (entered === null) return;
 
         if (String(entered).trim() === expected) onSuccess();
-        else alert('Неверный PIN');
+        else denyPinAndExit();
     }
 
     function secretTap() {
@@ -340,7 +368,13 @@
             '</svg>';
 
         const item = Lampa.Head.addIcon(icon, function () {
-            // Короткое OK -> безопасная синхронизация
+            // После hover:long телевизор часто ещё присылает обычный Enter
+            // при отпускании OK. Его один раз поглощаем.
+            if (suppressNextSyncEnter) {
+                suppressNextSyncEnter = false;
+                return;
+            }
+
             openSafeSync();
         });
 
@@ -348,16 +382,30 @@
             item.attr('data-rmedia-sync-head', '1');
             item.attr('title', 'Синхронизация');
 
-            // Долгое OK -> секретный вход администратора.
-            // Lampa сама генерирует hover:long для selector на пульте.
             item.off('hover:long.rmedia-admin').on('hover:long.rmedia-admin', function (e) {
                 if (e) {
                     e.preventDefault();
                     e.stopImmediatePropagation();
                 }
 
-                if (unlocked) lockNow();
-                else askPin(unlockNow);
+                // Не даём отпусканию долгого OK открыть Safe Sync/Settings.
+                suppressNextSyncEnter = true;
+
+                // Страховка: через 2 сек флаг снимается, даже если TV не пришлёт Enter.
+                setTimeout(function () {
+                    suppressNextSyncEnter = false;
+                }, 2000);
+
+                if (unlocked) {
+                    lockNow();
+                    try {
+                        if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                            Lampa.Controller.toggle('content');
+                        }
+                    } catch (err) {}
+                } else {
+                    askPin(unlockNow);
+                }
 
                 return false;
             });
@@ -691,7 +739,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.9 TV Long Press Admin] Ready');
+        console.log('[RMEDIA Lock v11.10 Wrong PIN Safe Exit] Ready');
     }
 
     if (window.appready) {
