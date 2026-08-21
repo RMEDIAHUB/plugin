@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_7_ready) return;
-    window.rmedia_lock_v11_7_ready = true;
+    if (window.rmedia_lock_v11_9_ready) return;
+    window.rmedia_lock_v11_9_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -340,44 +340,36 @@
             '</svg>';
 
         const item = Lampa.Head.addIcon(icon, function () {
+            // Короткое OK -> безопасная синхронизация
             openSafeSync();
         });
 
         if (item && item.attr) {
             item.attr('data-rmedia-sync-head', '1');
             item.attr('title', 'Синхронизация');
+
+            // Долгое OK -> секретный вход администратора.
+            // Lampa сама генерирует hover:long для selector на пульте.
+            item.off('hover:long.rmedia-admin').on('hover:long.rmedia-admin', function (e) {
+                if (e) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                }
+
+                if (unlocked) lockNow();
+                else askPin(unlockNow);
+
+                return false;
+            });
         }
 
         syncHeadAdded = true;
     }
 
     function bindTvAdminShortcut() {
-        // TV shortcut: 5 быстрых нажатий ВВЕРХ -> PIN.
-        // Keycodes cover browser + common Tizen/TV remotes.
-        const UP_CODES = [38, 29460, 50400012];
-
-        document.addEventListener('keydown', function (e) {
-            const code = e.keyCode || e.which || 0;
-            if (UP_CODES.indexOf(code) === -1 && e.key !== 'ArrowUp') return;
-
-            const now = Date.now();
-            remoteUpPresses.push(now);
-            remoteUpPresses = remoteUpPresses.filter(function (t) {
-                return now - t <= 2600;
-            });
-
-            if (remoteUpPresses.length >= 5) {
-                remoteUpPresses = [];
-
-                try {
-                    e.preventDefault();
-                    e.stopImmediatePropagation();
-                } catch (err) {}
-
-                if (unlocked) lockNow();
-                else askPin(unlockNow);
-            }
-        }, true);
+        // v11.9: глобальный секрет по стрелкам отключён.
+        // На ТВ админ-вход теперь через ДОЛГОЕ нажатие OK
+        // на верхней кнопке «Синхронизация».
     }
 
     function watchSettings() {
@@ -699,7 +691,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.7 Top Sync + Contact Link] Ready');
+        console.log('[RMEDIA Lock v11.9 TV Long Press Admin] Ready');
     }
 
     if (window.appready) {
