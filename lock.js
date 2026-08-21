@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_15_1_ready) return;
-    window.rmedia_lock_v11_15_1_ready = true;
+    if (window.rmedia_lock_v11_16_ready) return;
+    window.rmedia_lock_v11_16_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -164,6 +164,34 @@
     }
 
     function askSpecificPin(expected, title, onSuccess, wrongMode) {
+        // Remember where PIN was invoked from.
+        // Lampa.Input.edit ALWAYS returns to settings_component on close,
+        // which freezes Android if PIN was called from Head/Content.
+        let originController = null;
+
+        try {
+            const enabled = Lampa.Controller && Lampa.Controller.enabled
+                ? Lampa.Controller.enabled()
+                : null;
+
+            originController = enabled && enabled.name ? enabled.name : null;
+        } catch (e) {}
+
+        function restoreOrigin(callback) {
+            try {
+                if (
+                    originController &&
+                    Lampa.Controller &&
+                    typeof Lampa.Controller.toggle === 'function'
+                ) {
+                    Lampa.Controller.toggle(originController);
+                }
+            } catch (e) {}
+
+            // Android needs one tick after controller restoration.
+            setTimeout(callback, 80);
+        }
+
         if (window.Lampa && Lampa.Input && typeof Lampa.Input.edit === 'function') {
             Lampa.Input.edit({
                 title: title || 'RMEDIA PIN',
@@ -173,28 +201,40 @@
                 nomic: true,
                 password: true
             }, function (value) {
-                if (String(value || '').trim() === String(expected)) {
-                    /*
-                     * Input.edit itself returns Controller to settings_component
-                     * BEFORE calling us. On Android let that transition finish,
-                     * then execute the protected action.
-                     */
-                    setTimeout(function () {
+                const ok = String(value || '').trim() === String(expected);
+
+                if (ok) {
+                    restoreOrigin(function () {
                         onSuccess();
-                    }, 80);
+                    });
                 } else {
-                    if (wrongMode === 'menu') {
-                        try {
-                            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
-                                Lampa.Controller.toggle('settings');
-                            }
-                            if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Неверный PIN');
-                        } catch (e) {}
-                    } else {
-                        denyPinAndExit();
-                    }
+                    restoreOrigin(function () {
+                        if (wrongMode === 'menu') {
+                            try {
+                                if (Lampa.Noty && Lampa.Noty.show) {
+                                    Lampa.Noty.show('Неверный PIN');
+                                }
+                            } catch (e) {}
+                        } else {
+                            /*
+                             * For ADMIN PIN do not call denyPinAndExit after
+                             * restoring Head/Content: that would force Content
+                             * and can itself break Android navigation.
+                             * Just keep client mode and notify.
+                             */
+                            unlocked = false;
+                            hideRestrictedUI();
+
+                            try {
+                                if (Lampa.Noty && Lampa.Noty.show) {
+                                    Lampa.Noty.show('Неверный PIN');
+                                }
+                            } catch (e) {}
+                        }
+                    });
                 }
             });
+
             return;
         }
 
@@ -202,12 +242,10 @@
         if (entered === null) return;
 
         if (String(entered).trim() === String(expected)) onSuccess();
-        else if (wrongMode === 'menu') {
+        else {
             try {
                 if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Неверный PIN');
             } catch (e) {}
-        } else {
-            denyPinAndExit();
         }
     }
 
@@ -1089,7 +1127,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.15.1 PIN Defaults Swapped] Ready');
+        console.log('[RMEDIA Lock v11.16 Android PIN Controller Restore] Ready');
     }
 
     if (window.appready) {
