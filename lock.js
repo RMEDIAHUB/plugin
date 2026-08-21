@@ -1,10 +1,11 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_14_ready) return;
-    window.rmedia_lock_v11_14_ready = true;
+    if (window.rmedia_lock_v11_15_ready) return;
+    window.rmedia_lock_v11_15_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
+    const MENU_PIN_KEY = 'rmedia_menu_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
     const SECRET_TAPS = 5;
     const SECRET_WINDOW_MS = 2200;
@@ -43,6 +44,12 @@
     function getPin() {
         let pin = String(storageGet(PIN_KEY, '2580') || '2580').trim();
         if (!/^\d{4,8}$/.test(pin)) pin = '2580';
+        return pin;
+    }
+
+    function getMenuPin() {
+        let pin = String(storageGet(MENU_PIN_KEY, '1111') || '1111').trim();
+        if (!/^\d{4,8}$/.test(pin)) pin = '1111';
         return pin;
     }
 
@@ -156,31 +163,60 @@
         } catch (e) {}
     }
 
-    function askPin(onSuccess) {
-        const expected = getPin();
-
+    function askSpecificPin(expected, title, onSuccess, wrongMode) {
         if (window.Lampa && Lampa.Input && typeof Lampa.Input.edit === 'function') {
             Lampa.Input.edit({
-                title: 'RMEDIA PIN',
+                title: title || 'RMEDIA PIN',
                 value: '',
                 free: true,
                 nosave: true,
-                nomic: true
+                nomic: true,
+                password: true
             }, function (value) {
-                if (String(value || '').trim() === expected) {
-                    onSuccess();
+                if (String(value || '').trim() === String(expected)) {
+                    /*
+                     * Input.edit itself returns Controller to settings_component
+                     * BEFORE calling us. On Android let that transition finish,
+                     * then execute the protected action.
+                     */
+                    setTimeout(function () {
+                        onSuccess();
+                    }, 80);
                 } else {
-                    denyPinAndExit();
+                    if (wrongMode === 'menu') {
+                        try {
+                            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                                Lampa.Controller.toggle('settings');
+                            }
+                            if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Неверный PIN');
+                        } catch (e) {}
+                    } else {
+                        denyPinAndExit();
+                    }
                 }
             });
             return;
         }
 
-        const entered = window.prompt('RMEDIA PIN');
+        const entered = window.prompt(title || 'RMEDIA PIN');
         if (entered === null) return;
 
-        if (String(entered).trim() === expected) onSuccess();
-        else denyPinAndExit();
+        if (String(entered).trim() === String(expected)) onSuccess();
+        else if (wrongMode === 'menu') {
+            try {
+                if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Неверный PIN');
+            } catch (e) {}
+        } else {
+            denyPinAndExit();
+        }
+    }
+
+    function askPin(onSuccess) {
+        askSpecificPin(getPin(), 'RMEDIA ADMIN PIN', onSuccess, 'admin');
+    }
+
+    function askMenuPin(onSuccess) {
+        askSpecificPin(getMenuPin(), 'PIN меню', onSuccess, 'menu');
     }
 
     function secretTap() {
@@ -265,6 +301,33 @@
         return false;
     }
 
+    function openProtectedComponent(component) {
+        if (!component || !window.Lampa || !Lampa.Settings) return;
+
+        try {
+            // Native Settings Main does this before Settings.create().
+            // Without detach Android can leave two settings controllers/layers
+            // alive and the screen looks frozen.
+            if (Lampa.Settings.main && Lampa.Settings.main().render) {
+                Lampa.Settings.main().render().detach();
+            }
+        } catch (e) {}
+
+        setTimeout(function () {
+            try {
+                if (typeof Lampa.Settings.create === 'function') {
+                    Lampa.Settings.create(component);
+                }
+            } catch (e) {
+                try {
+                    if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                        Lampa.Controller.toggle('settings');
+                    }
+                } catch (err) {}
+            }
+        }, 30);
+    }
+
     function bindProtectedComponentsGate() {
         if (!window.Lampa || !Lampa.Settings || !Lampa.Settings.main) return;
 
@@ -293,9 +356,7 @@
 
             item.on('hover:enter.rmedia-protected', function (e) {
                 if (!isEnabled()) {
-                    if (component && Lampa.Settings && typeof Lampa.Settings.create === 'function') {
-                        Lampa.Settings.create(component);
-                    }
+                    openProtectedComponent(component);
                     return;
                 }
 
@@ -304,12 +365,8 @@
                     e.stopImmediatePropagation();
                 }
 
-                askPin(function () {
-                    try {
-                        if (component && Lampa.Settings && typeof Lampa.Settings.create === 'function') {
-                            Lampa.Settings.create(component);
-                        }
-                    } catch (err) {}
+                askMenuPin(function () {
+                    openProtectedComponent(component);
                 });
 
                 return false;
@@ -322,12 +379,8 @@
                 e.preventDefault();
                 e.stopImmediatePropagation();
 
-                askPin(function () {
-                    try {
-                        if (component && Lampa.Settings && typeof Lampa.Settings.create === 'function') {
-                            Lampa.Settings.create(component);
-                        }
-                    } catch (err) {}
+                askMenuPin(function () {
+                    openProtectedComponent(component);
                 });
 
                 return false;
@@ -640,6 +693,20 @@
             field: {
                 name: 'Клиентский режим',
                 description: 'Скрывает административные пункты и оставляет безопасную синхронизацию'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
+            param: {
+                name: MENU_PIN_KEY,
+                type: 'input',
+                values: '',
+                default: '1111'
+            },
+            field: {
+                name: 'PIN меню',
+                description: 'Для входа в RMEDIA Lock и Filmix'
             }
         });
 
@@ -1022,7 +1089,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.14 Protected Components + Mobile Back Fix] Ready');
+        console.log('[RMEDIA Lock v11.15 Dual PIN + Android Menu Fix] Ready');
     }
 
     if (window.appready) {
