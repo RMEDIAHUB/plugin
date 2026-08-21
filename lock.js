@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_4_ready) return;
-    window.rmedia_lock_v11_4_ready = true;
+    if (window.rmedia_lock_v11_5_ready) return;
+    window.rmedia_lock_v11_5_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -14,7 +14,9 @@
     let safeSyncOpening = false;
     let safeSyncAccountReached = false;
     let syncButtonAdded = false;
+    let syncHeadAdded = false;
     let extensionGateBound = false;
+    let remoteUpPresses = [];
 
     function storageGet(name, fallback) {
         try {
@@ -298,23 +300,95 @@
     }
 
     function addClientSyncMenu() {
-        if (syncButtonAdded || !window.Lampa || !Lampa.Menu || typeof Lampa.Menu.addButton !== 'function') return;
+        if (!window.Lampa || !Lampa.Menu || typeof Lampa.Menu.addButton !== 'function') return;
+
+        let button = $('.menu__item[data-action="rmedia_sync"]');
+
+        if (!button.length) {
+            const icon =
+                '<svg viewBox="0 0 24 24">' +
+                '<path fill="currentColor" d="M12 4a8 8 0 0 1 7.45 5.1l1.85-.62-2.58 4.3-4.32-2.55 1.95-.65A4.8 4.8 0 0 0 12 7.2a4.79 4.79 0 0 0-4.15 2.4L5.08 8A8 8 0 0 1 12 4Zm-7.45 10.9-1.85.62 2.58-4.3 4.32 2.55-1.95.65A4.8 4.8 0 0 0 12 16.8a4.79 4.79 0 0 0 4.15-2.4L18.92 16A8 8 0 0 1 12 20a8 8 0 0 1-7.45-5.1Z"/>' +
+                '</svg>';
+
+            button = Lampa.Menu.addButton(icon, 'Синхронизация', function () {
+                openSafeSync();
+            });
+
+            if (button && button.attr) {
+                button.attr('data-action', 'rmedia_sync');
+                button.addClass('rmedia-sync-menu selector');
+            }
+        }
+
+        if (button && button.length) {
+            button
+                .addClass('selector')
+                .attr('tabindex', '0')
+                .off('hover:enter.rmedia-sync')
+                .on('hover:enter.rmedia-sync', function (e) {
+                    if (e) {
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                    }
+                    openSafeSync();
+                    return false;
+                })
+                .off('click.rmedia-sync')
+                .on('click.rmedia-sync', function () {
+                    openSafeSync();
+                });
+
+            syncButtonAdded = true;
+        }
+    }
+
+    function addClientSyncHead() {
+        if (syncHeadAdded || !window.Lampa || !Lampa.Head || typeof Lampa.Head.addIcon !== 'function') return;
 
         const icon =
             '<svg viewBox="0 0 24 24">' +
             '<path fill="currentColor" d="M12 4a8 8 0 0 1 7.45 5.1l1.85-.62-2.58 4.3-4.32-2.55 1.95-.65A4.8 4.8 0 0 0 12 7.2a4.79 4.79 0 0 0-4.15 2.4L5.08 8A8 8 0 0 1 12 4Zm-7.45 10.9-1.85.62 2.58-4.3 4.32 2.55-1.95.65A4.8 4.8 0 0 0 12 16.8a4.79 4.79 0 0 0 4.15-2.4L18.92 16A8 8 0 0 1 12 20a8 8 0 0 1-7.45-5.1Z"/>' +
             '</svg>';
 
-        const button = Lampa.Menu.addButton(icon, 'Синхронизация', function () {
+        const item = Lampa.Head.addIcon(icon, function () {
             openSafeSync();
         });
 
-        if (button && button.attr) {
-            button.attr('data-action', 'rmedia_sync');
-            button.addClass('rmedia-sync-menu');
+        if (item && item.attr) {
+            item.attr('data-rmedia-sync-head', '1');
+            item.attr('title', 'Синхронизация');
         }
 
-        syncButtonAdded = true;
+        syncHeadAdded = true;
+    }
+
+    function bindTvAdminShortcut() {
+        // TV shortcut: 5 быстрых нажатий ВВЕРХ -> PIN.
+        // Keycodes cover browser + common Tizen/TV remotes.
+        const UP_CODES = [38, 29460, 50400012];
+
+        document.addEventListener('keydown', function (e) {
+            const code = e.keyCode || e.which || 0;
+            if (UP_CODES.indexOf(code) === -1 && e.key !== 'ArrowUp') return;
+
+            const now = Date.now();
+            remoteUpPresses.push(now);
+            remoteUpPresses = remoteUpPresses.filter(function (t) {
+                return now - t <= 2600;
+            });
+
+            if (remoteUpPresses.length >= 5) {
+                remoteUpPresses = [];
+
+                try {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                } catch (err) {}
+
+                if (unlocked) lockNow();
+                else askPin(unlockNow);
+            }
+        }, true);
     }
 
     function watchSettings() {
@@ -603,6 +677,8 @@
         addAdminSettings();
         initRemoteControl();
         addClientSyncMenu();
+        addClientSyncHead();
+        bindTvAdminShortcut();
         watchSettings();
         hideRestrictedUI();
         bindSecretGesture();
@@ -613,6 +689,7 @@
 
         setInterval(function () {
             addClientSyncMenu();
+            addClientSyncHead();
             hideRestrictedUI();
 
             if (!extensionGateBound || $('.settings__body').length) {
@@ -620,7 +697,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.4 Clean Block Screen] Ready');
+        console.log('[RMEDIA Lock v11.5 TV Remote Fix] Ready');
     }
 
     if (window.appready) {
