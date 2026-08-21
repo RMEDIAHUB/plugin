@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v4_ready) return;
-    window.rmedia_lock_v4_ready = true;
+    if (window.rmedia_lock_v5_ready) return;
+    window.rmedia_lock_v5_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -11,7 +11,9 @@
 
     let taps = [];
     let unlocked = false;
+
     let safeSyncOpening = false;
+    let safeSyncAccountReached = false;
     let syncButtonAdded = false;
 
     function storageGet(name, fallback) {
@@ -178,7 +180,6 @@
     function pruneAccountPanel(body) {
         if (!safeSyncOpening || unlocked || !body || !body.length) return;
 
-        // Keep only native "Синхронизировать" and "Бэкап" while signed in.
         body.find('.settings--account-user-info').hide();
         body.find('.settings--account-user-profile').hide();
         body.find('.settings--account-user-out').hide();
@@ -186,27 +187,35 @@
         body.find('.settings--account-user-sync').show();
         body.find('.settings--account-user-backup').show();
 
-        // Hide CUB advertising/header/QR and generic sync toggle.
         body.find('.ad-server').hide();
         body.find('[data-name="account_use"]').hide();
         body.find('.settings-param__label').hide();
 
-        // If not signed in, native sign-in row must remain available.
         body.find('.settings--account-signin').not('.hide').show();
+    }
+
+    function exitSafeSync() {
+        safeSyncOpening = false;
+        safeSyncAccountReached = false;
+
+        try {
+            $('body').removeClass('settings--open');
+
+            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                Lampa.Controller.toggle('content');
+            }
+        } catch (e) {
+            console.error('[RMEDIA Lock] exitSafeSync:', e);
+        }
+
+        hideRestrictedUI();
     }
 
     function openSafeSync() {
         safeSyncOpening = true;
+        safeSyncAccountReached = false;
 
         try {
-            /*
-             * Correct sequence:
-             * 1) Open normal Settings controller so settings HTML/body is attached.
-             * 2) Then open native account component.
-             *
-             * Calling Settings.create('account') directly while Menu is active can
-             * produce no visible result because the settings container is not opened yet.
-             */
             if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
                 Lampa.Controller.toggle('settings');
             }
@@ -256,7 +265,11 @@
         try {
             if (Lampa.Settings && Lampa.Settings.listener && Lampa.Settings.listener.follow) {
                 Lampa.Settings.listener.follow('open', function (e) {
-                    if (e.name === 'account' && safeSyncOpening && !unlocked) {
+                    if (!safeSyncOpening || unlocked) return;
+
+                    if (e.name === 'account') {
+                        safeSyncAccountReached = true;
+
                         setTimeout(function () {
                             pruneAccountPanel(e.body);
                         }, 0);
@@ -264,13 +277,32 @@
                         setTimeout(function () {
                             pruneAccountPanel(e.body);
                         }, 100);
-                    } else if (e.name !== 'main' && e.name !== 'account') {
-                        safeSyncOpening = false;
+
+                        return;
+                    }
+
+                    /*
+                     * IMPORTANT v5:
+                     * Opening Settings initially emits "main" before we create account.
+                     * That first "main" is allowed.
+                     *
+                     * Once account screen has already been reached, any later return
+                     * to "main" means user escaped via Back from Backup/Account.
+                     * Immediately leave Settings instead of exposing full menu.
+                     */
+                    if (e.name === 'main' && safeSyncAccountReached) {
+                        setTimeout(exitSafeSync, 0);
+                        return;
+                    }
+
+                    if (e.name !== 'main') {
+                        setTimeout(exitSafeSync, 0);
                     }
                 });
 
                 Lampa.Settings.listener.follow('close', function () {
                     safeSyncOpening = false;
+                    safeSyncAccountReached = false;
                 });
             }
         } catch (e) {}
@@ -284,7 +316,7 @@
             name: 'RMEDIA Lock',
             icon:
                 '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
-                '<path fill="currentColor" d="M17 8h-1V6a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2Zm-7-2a2 2 0 1 1 4 0v2h-4V6Zm2 9a2 2 0 1 1 0-4 2 2 0 0 1 0 4Z"/>' +
+                '<path fill="currentColor" d="M17 8h-1V6a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 1 1 4 0v2h-4V6Zm2 9a2 2 0 1 1 0-4 2 2 0 0 1 0 4Z"/>' +
                 '</svg>'
         });
 
@@ -328,7 +360,7 @@
             hideRestrictedUI();
         }, 1000);
 
-        console.log('[RMEDIA Lock v4 Client Sync Fix] Ready');
+        console.log('[RMEDIA Lock v5 Back Escape Fix] Ready');
     }
 
     if (window.appready) {
