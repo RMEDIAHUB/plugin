@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_3_ready) return;
-    window.rmedia_lock_v11_3_ready = true;
+    if (window.rmedia_lock_v11_4_ready) return;
+    window.rmedia_lock_v11_4_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -448,24 +448,52 @@
         if (!remoteOverlay) {
             remoteOverlay = $('<div class="rmedia-remote-lock"></div>');
             remoteOverlay.css({
-                position:'fixed', inset:'0', zIndex:'999999',
-                background:'#090909', color:'#fff',
-                display:'flex', alignItems:'center', justifyContent:'center',
-                padding:'28px', textAlign:'center'
+                position: 'fixed',
+                inset: '0',
+                zIndex: '999999',
+                background: '#090909',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '28px',
+                textAlign: 'center'
             });
             $('body').append(remoteOverlay);
         }
 
-        const title = status === 'pending' ? 'Ожидаем подтверждение оплаты'
-                    : status === 'expired' ? 'Срок доступа закончился'
+        const title =
+            status === 'pending'
+                ? 'Ожидаем подтверждение оплаты'
+                : status === 'expired'
+                    ? 'Срок доступа закончился'
                     : 'Доступ временно приостановлен';
+
+        function normalizeText(value) {
+            return String(value || '')
+                .trim()
+                .replace(/[.!\s]+$/g, '')
+                .toLowerCase();
+        }
+
+        const cleanMessage = String(message || '').trim();
+        const extraMessage =
+            cleanMessage && normalizeText(cleanMessage) !== normalizeText(title)
+                ? cleanMessage
+                : '';
 
         remoteOverlay.html(
             '<div style="max-width:720px">' +
-              '<div style="font-size:42px;font-weight:700;margin-bottom:18px">RMEDIAHUB</div>' +
-              '<div style="font-size:28px;margin-bottom:12px">'+title+'</div>' +
-              '<div style="font-size:20px;opacity:.75">'+(message || '')+'</div>' +
-              '<div style="font-size:16px;opacity:.45;margin-top:26px">Для связи: @rmediahub</div>' +
+                '<div style="font-size:42px;font-weight:700;margin-bottom:18px">RMEDIAHUB</div>' +
+                '<div style="font-size:28px;margin-bottom:12px">' + title + '</div>' +
+                (extraMessage
+                    ? '<div style="font-size:20px;opacity:.75;margin-bottom:10px">' + extraMessage + '</div>'
+                    : '') +
+                '<div style="font-size:18px;opacity:.9;margin-top:26px">' +
+                    'Для связи: ' +
+                    '<a href="https://t.me/rznvroman" target="_blank" ' +
+                    'style="color:#8ab4ff;text-decoration:underline;font-weight:600;">АДМИН</a>' +
+                '</div>' +
             '</div>'
         );
 
@@ -592,7 +620,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.3 Undefined Fix] Ready');
+        console.log('[RMEDIA Lock v11.4 Clean Block Screen] Ready');
     }
 
     if (window.appready) {
