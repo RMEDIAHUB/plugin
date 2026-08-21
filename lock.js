@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_2_ready) return;
-    window.rmedia_lock_v11_2_ready = true;
+    if (window.rmedia_lock_v11_3_ready) return;
+    window.rmedia_lock_v11_3_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -428,8 +428,14 @@
         try { localStorage.setItem(name, value); } catch(e2) {}
     }
 
-    function remoteClientId(){ return String(remoteGet(REMOTE_ID_KEY,'') || '').trim(); }
-    function remoteClientKey(){ return String(remoteGet(REMOTE_KEY_KEY,'') || '').trim(); }
+    function remoteClean(value) {
+        value = String(value == null ? '' : value).trim();
+        if (value === 'undefined' || value === 'null' || value === 'не задано') return '';
+        return value;
+    }
+
+    function remoteClientId(){ return remoteClean(remoteGet(REMOTE_ID_KEY,'не задано')); }
+    function remoteClientKey(){ return remoteClean(remoteGet(REMOTE_KEY_KEY,'не задано')); }
 
     function removeRemoteOverlay() {
         if (remoteOverlay) {
@@ -521,9 +527,20 @@
     function addRemoteAdminSettings() {
         if (!window.Lampa || !Lampa.SettingsApi) return;
 
+        try {
+            let oldId = Lampa.Storage.get(REMOTE_ID_KEY, 'не задано');
+            let oldKey = Lampa.Storage.get(REMOTE_KEY_KEY, 'не задано');
+
+            if (oldId === undefined || oldId === null || String(oldId) === 'undefined')
+                Lampa.Storage.set(REMOTE_ID_KEY, 'не задано');
+
+            if (oldKey === undefined || oldKey === null || String(oldKey) === 'undefined')
+                Lampa.Storage.set(REMOTE_KEY_KEY, 'не задано');
+        } catch(e) {}
+
         Lampa.SettingsApi.addParam({
             component: 'rmedia_lock',
-            param: { name: REMOTE_ID_KEY, type: 'input', values: '', default: '' },
+            param: { name: REMOTE_ID_KEY, type: 'input', values: '', default: 'не задано' },
             field: {
                 name: 'RMEDIA Client ID',
                 description: 'Например RM-1A2B3C4D'
@@ -532,7 +549,7 @@
 
         Lampa.SettingsApi.addParam({
             component: 'rmedia_lock',
-            param: { name: REMOTE_KEY_KEY, type: 'input', values: '', default: '' },
+            param: { name: REMOTE_KEY_KEY, type: 'input', values: '', default: 'не задано' },
             field: {
                 name: 'RMEDIA Client Key',
                 description: 'Секретный ключ клиента из панели RMEDIA Control'
@@ -575,7 +592,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.2 Input Fix] Ready');
+        console.log('[RMEDIA Lock v11.3 Undefined Fix] Ready');
     }
 
     if (window.appready) {
