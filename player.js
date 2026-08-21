@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_player_v5_ready) return;
-    window.rmedia_player_v5_ready = true;
+    if (window.rmedia_player_v7_ready) return;
+    window.rmedia_player_v7_ready = true;
 
     const COMPONENT = 'rmedia_player';
     const ENABLED   = 'rmedia_player_enabled';
@@ -24,6 +24,136 @@
     function isWindowsBrowser() {
         const ua = navigator.userAgent || '';
         return /Windows NT/i.test(ua) && !/Electron/i.test(ua);
+    }
+
+    function isIOS() {
+        const ua = navigator.userAgent || '';
+        return /iPhone|iPad|iPod/i.test(ua) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    }
+
+    let iosSelectPatched = false;
+    let iosSelectBypass = false;
+
+    const IOS_PLAYERS = [
+        { title: 'VLC',        value: 'vlc' },
+        { title: 'Infuse',     value: 'infuse' },
+        { title: 'nPlayer',    value: 'nplayer' },
+        { title: 'VidHub',     value: 'vidhub' },
+        { title: 'SVPlayer',   value: 'svplayer' },
+        { title: 'TracyPlayer',value: 'tracyplayer' },
+        { title: 'SenPlayer',  value: 'senplayer' },
+        { title: 'Встроенный', value: 'ios', runas: 'lampa' }
+    ];
+
+    function isTorrentActionMenu(options) {
+        if (!options || !Array.isArray(options.items)) return false;
+
+        let hasTimeAction = false;
+        let hasLampaRun = false;
+
+        options.items.forEach(function (item) {
+            if (!item) return;
+            if (item.timeclear || item.timefull) hasTimeAction = true;
+            if (item.player === 'lampa') hasLampaRun = true;
+        });
+
+        return hasTimeAction && hasLampaRun;
+    }
+
+    function patchIOSTorrentLongPress() {
+        if (!isIOS() || iosSelectPatched || !window.Lampa || !Lampa.Select || typeof Lampa.Select.show !== 'function') return;
+
+        const originalShow = Lampa.Select.show.bind(Lampa.Select);
+
+        Lampa.Select.show = function (options) {
+            if (iosSelectBypass || !isTorrentActionMenu(options)) {
+                return originalShow(options);
+            }
+
+            const current = (Lampa.Storage && Lampa.Storage.field('player_torrent')) || 'vlc';
+
+            const pickerItems = IOS_PLAYERS.map(function (p) {
+                return {
+                    title: p.title,
+                    rmedia_player: p.value,
+                    rmedia_runas: p.runas || p.value,
+                    selected: current === p.value
+                };
+            });
+
+            pickerItems.push({
+                title: 'Ещё действия',
+                rmedia_more: true
+            });
+
+            return originalShow({
+                title: 'Открыть торрент в плеере',
+                items: pickerItems,
+
+                onBack: function () {
+                    if (options.onBack) options.onBack();
+                },
+
+                onSelect: function (item) {
+                    if (item.rmedia_more) {
+                        iosSelectBypass = true;
+                        try {
+                            originalShow(options);
+                        } finally {
+                            iosSelectBypass = false;
+                        }
+                        return;
+                    }
+
+                    if (!item.rmedia_player) return;
+
+                    try {
+                        Lampa.Storage.set('player_torrent', item.rmedia_player);
+                    } catch (e) {}
+
+                    /*
+                     * Reuse Lampa's own torrent long-press handler:
+                     * it calls Player.runas(a.player) and then triggers the
+                     * selected file's normal hover:enter path, preserving
+                     * preload, timeline, playlist, callbacks, etc.
+                     */
+                    if (options.onSelect) {
+                        options.onSelect({
+                            player: item.rmedia_runas
+                        });
+                    }
+                }
+            });
+        };
+
+        iosSelectPatched = true;
+        console.log('[RMEDIA Player v7] iOS torrent long-press player menu enabled');
+    }
+
+    function configureIOS() {
+        if (!isIOS() || !window.Lampa || !Lampa.Storage) return;
+
+        patchIOSTorrentLongPress();
+
+        try {
+            /*
+             * Lampa uses separate storage fields for each playback type:
+             *   player         -> normal/online video
+             *   player_torrent -> torrent playback
+             *
+             * We only force torrent playback to VLC.
+             * General/online playback is left untouched, so Filmix/online
+             * continues to use the built-in Lampa player.
+             */
+            if (Lampa.Storage.field('player_torrent') !== 'vlc') {
+                Lampa.Storage.set('player_torrent', 'vlc');
+            }
+
+            console.log('[RMEDIA Player v7] iOS: torrent default VLC + long-press player picker; online unchanged');
+        } catch (e) {
+            console.warn('[RMEDIA Player v7] iOS setup failed:', e);
+        }
     }
 
     function toBase64Url(value) {
@@ -256,12 +386,23 @@
     }
 
     function init() {
+        if (isIOS()) {
+            configureIOS();
+
+            // CUB/settings sync may restore an older player_torrent value
+            // shortly after startup, so re-apply a few times.
+            setTimeout(configureIOS, 1000);
+            setTimeout(configureIOS, 4000);
+
+            return;
+        }
+
         if (!isWindowsBrowser()) return;
 
         addSettings();
         Lampa.Player.listener.follow('create', onCreate);
 
-        console.log('[RMEDIA Player v5] Ready');
+        console.log('[RMEDIA Player v7] Windows bridge ready');
     }
 
     if (window.appready) {
