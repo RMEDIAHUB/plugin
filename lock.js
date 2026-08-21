@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_6_ready) return;
-    window.rmedia_lock_v11_6_ready = true;
+    if (window.rmedia_lock_v11_7_ready) return;
+    window.rmedia_lock_v11_7_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -325,46 +325,10 @@
     }
 
     function addClientSyncMenu() {
-        if (!window.Lampa || !Lampa.Menu || typeof Lampa.Menu.addButton !== 'function') return;
-
-        let button = $('.menu__item[data-action="rmedia_sync"]');
-
-        if (!button.length) {
-            const icon =
-                '<svg viewBox="0 0 24 24">' +
-                '<path fill="currentColor" d="M12 4a8 8 0 0 1 7.45 5.1l1.85-.62-2.58 4.3-4.32-2.55 1.95-.65A4.8 4.8 0 0 0 12 7.2a4.79 4.79 0 0 0-4.15 2.4L5.08 8A8 8 0 0 1 12 4Zm-7.45 10.9-1.85.62 2.58-4.3 4.32 2.55-1.95.65A4.8 4.8 0 0 0 12 16.8a4.79 4.79 0 0 0 4.15-2.4L18.92 16A8 8 0 0 1 12 20a8 8 0 0 1-7.45-5.1Z"/>' +
-                '</svg>';
-
-            button = Lampa.Menu.addButton(icon, 'Синхронизация', function () {
-                openSafeSync();
-            });
-
-            if (button && button.attr) {
-                button.attr('data-action', 'rmedia_sync');
-                button.addClass('rmedia-sync-menu selector');
-            }
-        }
-
-        if (button && button.length) {
-            button
-                .addClass('selector')
-                .attr('tabindex', '0')
-                .off('hover:enter.rmedia-sync')
-                .on('hover:enter.rmedia-sync', function (e) {
-                    if (e) {
-                        e.preventDefault();
-                        e.stopImmediatePropagation();
-                    }
-                    openSafeSync();
-                    return false;
-                })
-                .off('click.rmedia-sync')
-                .on('click.rmedia-sync', function () {
-                    openSafeSync();
-                });
-
-            syncButtonAdded = true;
-        }
+        // В v11.7 боковую кнопку синхронизации убираем.
+        // Оставляем только верхнюю кнопку, которая лучше работает с ТВ-пультом.
+        $('.menu__item[data-action="rmedia_sync"], .rmedia-sync-menu').remove();
+        syncButtonAdded = false;
     }
 
     function addClientSyncHead() {
@@ -603,8 +567,8 @@
                     : '') +
                 '<div style="font-size:18px;opacity:.9;margin-top:26px">' +
                     'Для связи: ' +
-                    '<a href="https://t.me/rznvroman" target="_blank" ' +
-                    'style="color:#8ab4ff;text-decoration:underline;font-weight:600;">АДМИН</a>' +
+                    '<a href="https://t.me/rznvroman" target="_blank" rel="noopener" ' +
+                    'style="color:#8ab4ff;text-decoration:underline;font-weight:600;">t.me/rznvroman</a>' +
                 '</div>' +
             '</div>'
         );
@@ -735,7 +699,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.6 TV Focus Fix] Ready');
+        console.log('[RMEDIA Lock v11.7 Top Sync + Contact Link] Ready');
     }
 
     if (window.appready) {
