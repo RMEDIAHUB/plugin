@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v5_ready) return;
-    window.rmedia_lock_v5_ready = true;
+    if (window.rmedia_lock_v6_ready) return;
+    window.rmedia_lock_v6_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const ENABLED_KEY = 'rmedia_lock_enabled';
@@ -65,6 +65,28 @@
 
     function showRestrictedUI() {
         $(restrictedSelectors()).show();
+    }
+
+    function hideTorrServerAds(body) {
+        if (!body || !body.length) return;
+
+        /*
+         * TorrServer settings may contain a promotional/QR block.
+         * Hide only ad-like blocks inside the currently opened server component.
+         */
+        body.find('.ad-server').hide();
+
+        body.find('*').filter(function () {
+            const text = ($(this).text() || '').trim();
+            return /tsarea\.tv/i.test(text) || /аренда TorrServer/i.test(text);
+        }).each(function () {
+            const node = $(this);
+
+            // Prefer the nearest visually grouped block instead of hiding huge ancestors.
+            const block = node.closest('.ad-server, .settings-param, .settings-param__body, .settings-param__content, .selector');
+            if (block.length) block.hide();
+            else node.hide();
+        });
     }
 
     function lockNow() {
@@ -265,6 +287,17 @@
         try {
             if (Lampa.Settings && Lampa.Settings.listener && Lampa.Settings.listener.follow) {
                 Lampa.Settings.listener.follow('open', function (e) {
+                    // Remove TorrServer promo even in admin mode.
+                    if (e && e.name === 'server') {
+                        setTimeout(function () {
+                            hideTorrServerAds(e.body);
+                        }, 0);
+
+                        setTimeout(function () {
+                            hideTorrServerAds(e.body);
+                        }, 120);
+                    }
+
                     if (!safeSyncOpening || unlocked) return;
 
                     if (e.name === 'account') {
@@ -281,15 +314,6 @@
                         return;
                     }
 
-                    /*
-                     * IMPORTANT v5:
-                     * Opening Settings initially emits "main" before we create account.
-                     * That first "main" is allowed.
-                     *
-                     * Once account screen has already been reached, any later return
-                     * to "main" means user escaped via Back from Backup/Account.
-                     * Immediately leave Settings instead of exposing full menu.
-                     */
                     if (e.name === 'main' && safeSyncAccountReached) {
                         setTimeout(exitSafeSync, 0);
                         return;
@@ -358,9 +382,15 @@
         setInterval(function () {
             addClientSyncMenu();
             hideRestrictedUI();
+
+            // Fallback for cases when settings component is already on screen.
+            const settingsBody = $('.settings__body');
+            if (settingsBody.length && /tsarea\.tv/i.test(settingsBody.text() || '')) {
+                hideTorrServerAds(settingsBody);
+            }
         }, 1000);
 
-        console.log('[RMEDIA Lock v5 Back Escape Fix] Ready');
+        console.log('[RMEDIA Lock v6 No TorrServer Ads] Ready');
     }
 
     if (window.appready) {
