@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_18_ready) return;
-    window.rmedia_lock_v11_18_ready = true;
+    if (window.rmedia_lock_v11_19_ready) return;
+    window.rmedia_lock_v11_19_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -19,6 +19,7 @@
     let extensionGateBound = false;
     let protectedComponentsBound = false;
     let mobileBackBound = false;
+    let menuPinBusy = false;
     let remoteUpPresses = [];
     let suppressNextSyncEnter = false;
 
@@ -182,7 +183,7 @@
         } catch (e) {}
     }
 
-    function askSpecificPin(expected, title, onSuccess, wrongMode) {
+    function askSpecificPin(expected, title, onSuccess, wrongMode, onDone) {
         // Remember where PIN was invoked from.
         // Lampa.Input.edit ALWAYS returns to settings_component on close,
         // which freezes Android if PIN was called from Head/Content.
@@ -195,6 +196,15 @@
 
             originController = enabled && enabled.name ? enabled.name : null;
         } catch (e) {}
+
+        let finished = false;
+        function finishOnce() {
+            if (finished) return;
+            finished = true;
+            try {
+                if (typeof onDone === 'function') onDone();
+            } catch (e) {}
+        }
 
         function restoreOrigin(callback) {
             try {
@@ -228,6 +238,7 @@
                     });
                 } else {
                     restoreOrigin(function () {
+                        finishOnce();
                         if (wrongMode === 'menu') {
                             try {
                                 if (Lampa.Noty && Lampa.Noty.show) {
@@ -258,10 +269,14 @@
         }
 
         const entered = window.prompt(title || 'RMEDIA PIN');
-        if (entered === null) return;
+        if (entered === null) {
+            finishOnce();
+            return;
+        }
 
         if (String(entered).trim() === String(expected)) onSuccess();
         else {
+            finishOnce();
             try {
                 if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Неверный PIN');
             } catch (e) {}
@@ -273,7 +288,24 @@
     }
 
     function askMenuPin(onSuccess) {
-        askSpecificPin(getMenuPin(), 'PIN меню', onSuccess, 'menu');
+        // Chrome/desktop may emit both Lampa hover:enter and native click
+        // for the same activation. Allow only one menu PIN dialog at a time.
+        if (menuPinBusy) return;
+
+        menuPinBusy = true;
+
+        askSpecificPin(
+            getMenuPin(),
+            'PIN меню',
+            function () {
+                menuPinBusy = false;
+                onSuccess();
+            },
+            'menu',
+            function () {
+                menuPinBusy = false;
+            }
+        );
     }
 
     function secretTap() {
@@ -415,6 +447,8 @@
             item.off('hover:enter');
 
             item.on('hover:enter.rmedia-protected', function (e) {
+                item.data('rmedia-last-enter', Date.now());
+
                 if (!isEnabled()) {
                     openProtectedComponent(component);
                     return;
@@ -435,6 +469,20 @@
             // Touch Safari can dispatch click in addition to hover:enter.
             item.off('click.rmedia-protected').on('click.rmedia-protected', function (e) {
                 if (!isEnabled()) return;
+
+                const lastEnter = Number(item.data('rmedia-last-enter') || 0);
+
+                // Same physical click already handled by Lampa hover:enter.
+                if (Date.now() - lastEnter < 700) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    return false;
+                }
+
+                // Desktop Chrome does not need a second native click path.
+                // Keep this only as fallback for touch/mobile browsers.
+                const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+                if (!isTouch) return;
 
                 e.preventDefault();
                 e.stopImmediatePropagation();
@@ -1150,7 +1198,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.18 Extensions Menu PIN] Ready');
+        console.log('[RMEDIA Lock v11.19 Chrome Double PIN Fix] Ready');
     }
 
     if (window.appready) {
