@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_19_ready) return;
-    window.rmedia_lock_v11_19_ready = true;
+    if (window.rmedia_lock_v11_20_ready) return;
+    window.rmedia_lock_v11_20_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -386,6 +386,12 @@
         // so protect both by component id fingerprint and visible title.
         if (component.indexOf('filmix') >= 0) return true;
         if (title === 'filmix' || title.indexOf('filmix') >= 0) return true;
+
+        // Protect the third-party extensions catalog shown as
+        // «Пиратские плагины». Different builds may use different
+        // component ids, so check both component and visible title.
+        if (component.indexOf('pirat') >= 0 || component.indexOf('pirate') >= 0) return true;
+        if (title.indexOf('пиратские плагины') >= 0) return true;
 
         return false;
     }
@@ -1198,7 +1204,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.19 Chrome Double PIN Fix] Ready');
+        console.log('[RMEDIA Lock v11.20 Pirate Plugins PIN Gate] Ready');
     }
 
     if (window.appready) {
