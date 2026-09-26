@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_21_ready) return;
-    window.rmedia_lock_v11_21_ready = true;
+    if (window.rmedia_lock_v11_20_ready) return;
+    window.rmedia_lock_v11_20_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -56,7 +56,6 @@
 
     function restrictedSelectors() {
         return [
-            '.open--settings',
             '.menu__item[data-action="settings"]',
             '.menu__item[data-action="about"]',
             '.menu__item[data-action="console"]',
@@ -348,10 +347,57 @@
         });
     }
 
+    function bindSafePlayerButton() {
+        /*
+         * Client-safe Settings shortcut:
+         * the native top Settings button opens ONLY Lampa's native "Player"
+         * component. The full Settings menu remains hidden/protected.
+         *
+         * Lampa itself builds the Player options for the current platform,
+         * so Apple / Android / TV keep their own native player choices.
+         */
+        $(document)
+            .off('click.rmedia-player hover:enter.rmedia-player', '.open--settings')
+            .on(
+                'click.rmedia-player hover:enter.rmedia-player',
+                '.open--settings',
+                function (e) {
+                    if (!isEnabled() || unlocked) return;
+
+                    if (e) {
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                    }
+
+                    try {
+                        if (Lampa.Settings && Lampa.Settings.main && Lampa.Settings.main().render) {
+                            Lampa.Settings.main().render().detach();
+                        }
+                    } catch (err) {}
+
+                    setTimeout(function () {
+                        try {
+                            if (Lampa.Settings && typeof Lampa.Settings.create === 'function') {
+                                Lampa.Settings.create('player');
+                            }
+                        } catch (err) {
+                            try {
+                                if (Lampa.Noty && Lampa.Noty.show) {
+                                    Lampa.Noty.show('Не удалось открыть Плеер');
+                                }
+                            } catch (e2) {}
+                        }
+                    }, 30);
+
+                    return false;
+                }
+            );
+    }
+
     function protectAdminClicks() {
         $(document).on(
             'click.rmedia-lock hover:enter.rmedia-lock',
-            '.open--settings, .open--profile, .open--console, .open--terminal, .head__action[data-action="console"], .head__action[data-action="terminal"], .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
+            '.open--profile, .open--console, .open--terminal, .head__action[data-action="console"], .head__action[data-action="terminal"], .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
             function (e) {
                 if (!isEnabled() || unlocked) return;
 
@@ -847,7 +893,6 @@
     const REMOTE_KEY_KEY = 'rmedia_remote_client_key';
     const REMOTE_CACHE_KEY = 'rmedia_remote_last_status';
     const REMOTE_CACHE_TIME_KEY = 'rmedia_remote_last_ok_at';
-    const REMOTE_INSTALL_ID_KEY = 'rmedia_install_id';
     const REMOTE_GRACE_MS = 24 * 60 * 60 * 1000;
 
     let remoteOverlay = null;
@@ -879,89 +924,6 @@
     function remoteClientId(){ return remoteClean(remoteGet(REMOTE_ID_KEY,'не задано')); }
     function remoteClientKey(){ return remoteClean(remoteGet(REMOTE_KEY_KEY,'не задано')); }
 
-    function makeInstallId() {
-        let id = remoteClean(remoteGet(REMOTE_INSTALL_ID_KEY, ''));
-        if (id) return id;
-
-        try {
-            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
-                id = 'DEV-' + window.crypto.randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase();
-            }
-        } catch(e) {}
-
-        if (!id) {
-            const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-            let s = '';
-            for (let i = 0; i < 12; i++) {
-                s += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
-            }
-            id = 'DEV-' + s;
-        }
-
-        remoteSet(REMOTE_INSTALL_ID_KEY, id);
-        return id;
-    }
-
-    function detectDeviceInfo() {
-        const ua = String((navigator && navigator.userAgent) || '');
-        const platformRaw = String((navigator && navigator.platform) || '');
-        let platform = platformRaw || 'Web';
-        let name = '';
-
-        if (/Tizen/i.test(ua)) {
-            platform = 'Tizen';
-            name = 'Samsung TV';
-        } else if (/Web0S|webOS/i.test(ua)) {
-            platform = 'webOS';
-            name = 'LG TV';
-        } else if (/Android/i.test(ua) && /TV|BRAVIA|AFT|MiTV|SmartTV/i.test(ua)) {
-            platform = 'Android TV';
-            name = 'Android TV';
-        } else if (/Android/i.test(ua)) {
-            platform = 'Android';
-            name = 'Android';
-        } else if (/iPad/i.test(ua) || (platformRaw === 'MacIntel' && navigator.maxTouchPoints > 1)) {
-            platform = 'iPadOS';
-            name = 'iPad';
-        } else if (/iPhone/i.test(ua)) {
-            platform = 'iOS';
-            name = 'iPhone';
-        } else if (/Windows/i.test(ua)) {
-            platform = 'Windows';
-            name = 'Windows PC';
-        } else if (/Macintosh|Mac OS X/i.test(ua)) {
-            platform = 'macOS';
-            name = 'Mac';
-        } else if (/Linux/i.test(ua)) {
-            platform = 'Linux';
-            name = 'Linux';
-        }
-
-        // Some TV user agents expose a model token.
-        const modelPatterns = [
-            /\b(SM-[A-Z0-9-]+)\b/i,
-            /\b(BRAVIA[\w-]*)\b/i,
-            /\b(TV-[A-Z0-9-]+)\b/i,
-            /\b(LM\d+[A-Z0-9-]*)\b/i,
-            /\b(OLED\d+[A-Z0-9-]*)\b/i
-        ];
-
-        for (let i = 0; i < modelPatterns.length; i++) {
-            const m = ua.match(modelPatterns[i]);
-            if (m && m[1]) {
-                name = name ? (name + ' · ' + m[1]) : m[1];
-                break;
-            }
-        }
-
-        return {
-            install_id: makeInstallId(),
-            device_name: name || platform || 'Lampa',
-            platform: platform || 'Web',
-            user_agent: ua.slice(0, 500)
-        };
-    }
-
     function removeRemoteOverlay() {
         if (remoteOverlay) {
             remoteOverlay.remove();
@@ -992,9 +954,7 @@
                 ? 'Ожидаем подтверждение оплаты'
                 : status === 'expired'
                     ? 'Срок доступа закончился'
-                    : status === 'device_limit'
-                        ? 'Достигнут лимит устройств'
-                        : 'Доступ временно приостановлен';
+                    : 'Доступ временно приостановлен';
 
         function normalizeText(value) {
             return String(value || '')
@@ -1033,11 +993,6 @@
         remoteSet(REMOTE_CACHE_KEY, JSON.stringify(data));
         remoteSet(REMOTE_CACHE_TIME_KEY, String(Date.now()));
 
-        if (data.device_allowed === false) {
-            showRemoteOverlay('device_limit', data.message || 'Достигнут лимит устройств. Обратитесь к администратору.');
-            return;
-        }
-
         if (data.status === 'active') removeRemoteOverlay();
         else showRemoteOverlay(data.status, data.message || '');
     }
@@ -1049,23 +1004,12 @@
         // Пока клиент не привязан — не блокируем. Привязку делает админ.
         if (!id || !key) return;
 
-        const device = detectDeviceInfo();
-        const url = REMOTE_API + '/v1/client/heartbeat?_=' + Date.now();
+        const url = REMOTE_API + '/v1/client/status?id=' +
+                    encodeURIComponent(id) + '&key=' + encodeURIComponent(key) +
+                    '&_=' + Date.now();
 
         try {
-            const r = await fetch(url, {
-                method: 'POST',
-                cache: 'no-store',
-                headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({
-                    id: id,
-                    key: key,
-                    install_id: device.install_id,
-                    device_name: device.device_name,
-                    platform: device.platform,
-                    user_agent: device.user_agent
-                })
-            });
+            const r = await fetch(url, {cache:'no-store'});
             if (!r.ok) throw new Error('HTTP '+r.status);
             const data = await r.json();
             applyRemoteStatus(data);
@@ -1124,15 +1068,6 @@
             field: {
                 name: 'RMEDIA Client Key',
                 description: 'Секретный ключ клиента из панели RMEDIA Control'
-            }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: 'rmedia_lock',
-            param: { name: REMOTE_INSTALL_ID_KEY, type: 'input', values: '', default: '' },
-            field: {
-                name: 'RMEDIA Installation ID',
-                description: 'Уникальный ID этой установки. Создаётся автоматически.'
             }
         });
     }
@@ -1291,6 +1226,7 @@
         watchSettings();
         hideRestrictedUI();
         bindSecretGesture();
+        bindSafePlayerButton();
         protectAdminClicks();
         bindMobileSettingsBackFix();
 
@@ -1315,7 +1251,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.21 Device Binding] Ready');
+        console.log('[RMEDIA Lock v11.21 Pirate Plugins PIN Gate] Ready');
     }
 
     if (window.appready) {
