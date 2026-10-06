@@ -56,7 +56,6 @@
 
     function restrictedSelectors() {
         return [
-            '.open--settings',
             '.menu__item[data-action="settings"]',
             '.menu__item[data-action="about"]',
             '.menu__item[data-action="console"]',
@@ -348,10 +347,61 @@
         });
     }
 
+    function bindSafePlayerButton() {
+        // Restore the client shortcut from the previous GitHub version.
+        // Lampa builds its native Player options for the current platform.
+        let openingTimer = null;
+
+        $(document)
+            .off('click.rmedia-player hover:enter.rmedia-player', '.open--settings')
+            .on(
+                'click.rmedia-player hover:enter.rmedia-player',
+                '.open--settings',
+                function (e) {
+                    if (!isEnabled() || unlocked) return;
+
+                    if (e) {
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                    }
+
+                    try {
+                        // The native header handler opens Settings first.
+                        // Detach its main menu before creating Player.
+                        if (Lampa.Settings && Lampa.Settings.main && Lampa.Settings.main().render) {
+                            Lampa.Settings.main().render().detach();
+                        }
+                    } catch (err) {}
+
+                    // Touch can send both hover:enter and click for one press.
+                    if (openingTimer !== null) clearTimeout(openingTimer);
+                    openingTimer = setTimeout(function () {
+                        openingTimer = null;
+                        if (!isEnabled() || unlocked) return;
+                        try {
+                            if (Lampa.Settings && typeof Lampa.Settings.create === 'function') {
+                                Lampa.Settings.create('player', {
+                                    onBack: closeSettingsToContent
+                                });
+                            }
+                        } catch (err) {
+                            try {
+                                if (Lampa.Noty && Lampa.Noty.show) {
+                                    Lampa.Noty.show('Не удалось открыть Плеер');
+                                }
+                            } catch (e2) {}
+                        }
+                    }, 30);
+
+                    return false;
+                }
+            );
+    }
+
     function protectAdminClicks() {
         $(document).on(
             'click.rmedia-lock hover:enter.rmedia-lock',
-            '.open--settings, .open--profile, .open--console, .open--terminal, .head__action[data-action="console"], .head__action[data-action="terminal"], .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
+            '.open--profile, .open--console, .open--terminal, .head__action[data-action="console"], .head__action[data-action="terminal"], .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
             function (e) {
                 if (!isEnabled() || unlocked) return;
 
@@ -1443,6 +1493,7 @@
         watchSettings();
         hideRestrictedUI();
         bindSecretGesture();
+        bindSafePlayerButton();
         protectAdminClicks();
         bindMobileSettingsBackFix();
 
@@ -1467,7 +1518,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.21 Device Binding] Ready');
+        console.log('[RMEDIA Lock TEST48 + Device Binding + Player] Ready');
     }
 
     if (window.appready) {
