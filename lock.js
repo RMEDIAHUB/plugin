@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.rmedia_lock_v11_20_ready) return;
-    window.rmedia_lock_v11_20_ready = true;
+    if (window.rmedia_lock_test48_ready) return;
+    window.rmedia_lock_test48_ready = true;
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -56,6 +56,7 @@
 
     function restrictedSelectors() {
         return [
+            '.open--settings',
             '.menu__item[data-action="settings"]',
             '.menu__item[data-action="about"]',
             '.menu__item[data-action="console"]',
@@ -347,57 +348,10 @@
         });
     }
 
-    function bindSafePlayerButton() {
-        /*
-         * Client-safe Settings shortcut:
-         * the native top Settings button opens ONLY Lampa's native "Player"
-         * component. The full Settings menu remains hidden/protected.
-         *
-         * Lampa itself builds the Player options for the current platform,
-         * so Apple / Android / TV keep their own native player choices.
-         */
-        $(document)
-            .off('click.rmedia-player hover:enter.rmedia-player', '.open--settings')
-            .on(
-                'click.rmedia-player hover:enter.rmedia-player',
-                '.open--settings',
-                function (e) {
-                    if (!isEnabled() || unlocked) return;
-
-                    if (e) {
-                        e.preventDefault();
-                        e.stopImmediatePropagation();
-                    }
-
-                    try {
-                        if (Lampa.Settings && Lampa.Settings.main && Lampa.Settings.main().render) {
-                            Lampa.Settings.main().render().detach();
-                        }
-                    } catch (err) {}
-
-                    setTimeout(function () {
-                        try {
-                            if (Lampa.Settings && typeof Lampa.Settings.create === 'function') {
-                                Lampa.Settings.create('player');
-                            }
-                        } catch (err) {
-                            try {
-                                if (Lampa.Noty && Lampa.Noty.show) {
-                                    Lampa.Noty.show('Не удалось открыть Плеер');
-                                }
-                            } catch (e2) {}
-                        }
-                    }, 30);
-
-                    return false;
-                }
-            );
-    }
-
     function protectAdminClicks() {
         $(document).on(
             'click.rmedia-lock hover:enter.rmedia-lock',
-            '.open--profile, .open--console, .open--terminal, .head__action[data-action="console"], .head__action[data-action="terminal"], .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
+            '.open--settings, .open--profile, .open--console, .open--terminal, .head__action[data-action="console"], .head__action[data-action="terminal"], .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
             function (e) {
                 if (!isEnabled() || unlocked) return;
 
@@ -889,14 +843,67 @@
 
     // ===== RMEDIA REMOTE CONTROL v11 =====
     const REMOTE_API = 'http://178.105.179.72:8787';
+    // Migration target: 2.28.75.180. The public port/protocol must be verified
+    // from docker-compose / reverse-proxy configuration before changing this.
+    // Set a verified full URL here for all installations, or in admin settings.
+    const REMOTE_API_VERIFIED = '';
+    const REMOTE_API_KEY = 'rmedia_remote_api_url';
     const REMOTE_ID_KEY = 'rmedia_remote_client_id';
     const REMOTE_KEY_KEY = 'rmedia_remote_client_key';
     const REMOTE_CACHE_KEY = 'rmedia_remote_last_status';
     const REMOTE_CACHE_TIME_KEY = 'rmedia_remote_last_ok_at';
+    const REMOTE_INSTALL_ID_KEY = 'rmedia_install_id';
     const REMOTE_GRACE_MS = 24 * 60 * 60 * 1000;
 
     let remoteOverlay = null;
     let remoteTimer = null;
+    let remoteClockTimer = null;
+    let remoteData = null;
+    let remoteOverlaySignature = '';
+    let remoteOriginController = 'content';
+    let remoteChecking = false;
+    const CONTACT_FALLBACK = 'https://t.me/rznvroman';
+
+    function remoteApi() {
+        const candidate = remoteClean(remoteGet(REMOTE_API_KEY, '')) || REMOTE_API_VERIFIED || REMOTE_API;
+        const parsed = new URL(candidate);
+        if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+            throw new Error('Invalid RMEDIA API URL');
+        }
+        return candidate.replace(/\/+$/, '');
+    }
+
+    function remoteScope() {
+        return remoteClientId() + ':' + remoteClientKey() + ':' + makeInstallId() + ':' + remoteApi();
+    }
+
+    function remoteNow(data) {
+        const server = Date.parse(data && data.server_time);
+        const received = Number(data && data._received_at);
+        return Number.isFinite(server) && received ? server + (Date.now() - received) : Date.now();
+    }
+
+    function remoteEscape(value) {
+        return String(value || '').replace(/[&<>"']/g, function (c) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c];
+        });
+    }
+
+    function remoteContact(data) {
+        const value = String(data && data.admin_contact_url || CONTACT_FALLBACK);
+        try {
+            const parsed = new URL(value);
+            if (/^https?:$/.test(parsed.protocol) && !parsed.username && !parsed.password) return value;
+        } catch(e) {}
+        return CONTACT_FALLBACK;
+    }
+
+    function focusRemoteOverlay() {
+        if (!remoteOverlay) return;
+        try { Lampa.Controller.toggle('rmedia_remote_lock'); } catch(e) {}
+        const button = remoteOverlay.find('.rmedia-contact');
+        if (button.length && button[0].focus) button[0].focus();
+    }
 
     function remoteGet(name, fallback) {
         try {
@@ -924,15 +931,111 @@
     function remoteClientId(){ return remoteClean(remoteGet(REMOTE_ID_KEY,'не задано')); }
     function remoteClientKey(){ return remoteClean(remoteGet(REMOTE_KEY_KEY,'не задано')); }
 
+    function makeInstallId() {
+        let id = remoteClean(remoteGet(REMOTE_INSTALL_ID_KEY, ''));
+        if (id) return id;
+
+        try {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                id = 'DEV-' + window.crypto.randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase();
+            }
+        } catch(e) {}
+
+        if (!id) {
+            const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            let s = '';
+            for (let i = 0; i < 12; i++) {
+                s += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+            }
+            id = 'DEV-' + s;
+        }
+
+        remoteSet(REMOTE_INSTALL_ID_KEY, id);
+        return id;
+    }
+
+    function detectDeviceInfo() {
+        const ua = String((navigator && navigator.userAgent) || '');
+        const platformRaw = String((navigator && navigator.platform) || '');
+        let platform = platformRaw || 'Web';
+        let name = '';
+
+        if (/Tizen/i.test(ua)) {
+            platform = 'Tizen';
+            name = 'Samsung TV';
+        } else if (/Web0S|webOS/i.test(ua)) {
+            platform = 'webOS';
+            name = 'LG TV';
+        } else if (/Android/i.test(ua) && /TV|BRAVIA|AFT|MiTV|SmartTV/i.test(ua)) {
+            platform = 'Android TV';
+            name = 'Android TV';
+        } else if (/Android/i.test(ua)) {
+            platform = 'Android';
+            name = 'Android';
+        } else if (/iPad/i.test(ua) || (platformRaw === 'MacIntel' && navigator.maxTouchPoints > 1)) {
+            platform = 'iPadOS';
+            name = 'iPad';
+        } else if (/iPhone/i.test(ua)) {
+            platform = 'iOS';
+            name = 'iPhone';
+        } else if (/Windows/i.test(ua)) {
+            platform = 'Windows';
+            name = 'Windows PC';
+        } else if (/Macintosh|Mac OS X/i.test(ua)) {
+            platform = 'macOS';
+            name = 'Mac';
+        } else if (/Linux/i.test(ua)) {
+            platform = 'Linux';
+            name = 'Linux';
+        }
+
+        // Some TV user agents expose a model token.
+        const modelPatterns = [
+            /\b(SM-[A-Z0-9-]+)\b/i,
+            /\b(BRAVIA[\w-]*)\b/i,
+            /\b(TV-[A-Z0-9-]+)\b/i,
+            /\b(LM\d+[A-Z0-9-]*)\b/i,
+            /\b(OLED\d+[A-Z0-9-]*)\b/i
+        ];
+
+        for (let i = 0; i < modelPatterns.length; i++) {
+            const m = ua.match(modelPatterns[i]);
+            if (m && m[1]) {
+                name = name ? (name + ' · ' + m[1]) : m[1];
+                break;
+            }
+        }
+
+        return {
+            install_id: makeInstallId(),
+            device_name: name || platform || 'Lampa',
+            platform: platform || 'Web',
+            user_agent: ua.slice(0, 500)
+        };
+    }
+
     function removeRemoteOverlay() {
         if (remoteOverlay) {
             remoteOverlay.remove();
             remoteOverlay = null;
+            remoteOverlaySignature = '';
+            try { Lampa.Controller.toggle(remoteOriginController || 'content'); } catch(e) {}
         }
     }
 
-    function showRemoteOverlay(status, message) {
+    function showRemoteOverlay(status, message, data) {
+        const isTestExpired = status === 'expired' && data && data.test &&
+            !data.test.converted_at && remoteNow(data) >= Date.parse(data.test.ends_at);
+        const creditUntil = Date.parse(data && data.credit_until);
+        const creditVisible = isTestExpired && data.credit_available !== false &&
+            Number.isFinite(creditUntil) && remoteNow(data) < creditUntil;
+        const contact = remoteContact(data);
+        const signature = JSON.stringify([status, message, isTestExpired, creditVisible, contact]);
         if (!remoteOverlay) {
+            try {
+                const origin = Lampa.Controller.enabled();
+                remoteOriginController = origin && origin.name || 'content';
+            } catch(e) {}
             remoteOverlay = $('<div class="rmedia-remote-lock"></div>');
             remoteOverlay.css({
                 position: 'fixed',
@@ -946,15 +1049,18 @@
                 padding: '28px',
                 textAlign: 'center'
             });
+            remoteOverlay.attr('role', 'dialog').attr('aria-modal', 'true');
             $('body').append(remoteOverlay);
         }
 
         const title =
-            status === 'pending'
+            isTestExpired ? 'ULTIMATE TEST завершён' : status === 'pending'
                 ? 'Ожидаем подтверждение оплаты'
                 : status === 'expired'
                     ? 'Срок доступа закончился'
-                    : 'Доступ временно приостановлен';
+                    : status === 'device_limit'
+                        ? 'Достигнут лимит устройств'
+                        : 'Доступ временно приостановлен';
 
         function normalizeText(value) {
             return String(value || '')
@@ -969,32 +1075,76 @@
                 ? cleanMessage
                 : '';
 
-        remoteOverlay.html(
+        if (signature !== remoteOverlaySignature) {
+          remoteOverlaySignature = signature;
+          remoteOverlay.html(
             '<div style="max-width:720px">' +
                 '<div style="font-size:42px;font-weight:700;margin-bottom:18px">RMEDIAHUB</div>' +
                 '<div style="font-size:28px;margin-bottom:12px">' + title + '</div>' +
                 (extraMessage
-                    ? '<div style="font-size:20px;opacity:.75;margin-bottom:10px">' + extraMessage + '</div>'
+                    ? '<div style="font-size:20px;opacity:.75;margin-bottom:10px">' + remoteEscape(extraMessage) + '</div>'
                     : '') +
+                (creditVisible ? '<div class="rmedia-credit" style="font-size:20px;margin-top:20px">' +
+                    '10€ теста можно зачесть в подписку.<br>Осталось: <span class="rmedia-credit-time"></span></div>' : '') +
                 '<div style="font-size:18px;opacity:.9;margin-top:26px">' +
-                    'Для связи: ' +
-                    '<a href="https://t.me/rznvroman" target="_blank" rel="noopener" ' +
-                    'style="color:#8ab4ff;text-decoration:underline;font-weight:600;">t.me/rznvroman</a>' +
+                    '<a class="rmedia-contact selector" tabindex="0" href="' + remoteEscape(contact) + '" target="_blank" rel="noopener noreferrer" ' +
+                    'style="display:inline-block;padding:14px 20px;border:2px solid #8ab4ff;border-radius:12px;color:#8ab4ff;font-weight:600;">Связаться с администратором</a>' +
+                    '<div style="margin-top:12px;overflow-wrap:anywhere">' + remoteEscape(contact.replace(/^https?:\/\//, '')) + '</div>' +
                 '</div>' +
             '</div>'
-        );
-
-        try { Lampa.Controller.toggle('content'); } catch(e) {}
+          );
+          const button = remoteOverlay.find('.rmedia-contact');
+          button.on('hover:enter.rmedia-contact', function () {
+              if (this.click) this.click();
+          });
+          focusRemoteOverlay();
+        }
+        if (creditVisible) {
+            const seconds = Math.max(0, Math.ceil((creditUntil - remoteNow(data)) / 1000));
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor(seconds % 3600 / 60);
+            const remainder = seconds % 60;
+            remoteOverlay.find('.rmedia-credit-time').text(hours + ' ч ' + minutes + ' мин ' + remainder + ' сек');
+        }
     }
 
     function applyRemoteStatus(data) {
         if (!data || !data.status) return;
-
+        data._received_at = Date.now();
+        data._scope = remoteScope();
+        remoteData = data;
         remoteSet(REMOTE_CACHE_KEY, JSON.stringify(data));
         remoteSet(REMOTE_CACHE_TIME_KEY, String(Date.now()));
+        renderRemoteStatus(data);
+    }
 
+    function renderRemoteStatus(data) {
+        if (!data) return;
+        if (data._scope !== remoteScope()) {
+            remoteData = null;
+            removeRemoteOverlay();
+            return;
+        }
+
+        // A test expires locally at its exact server timestamp, even offline.
+        if (data.test && !data.test.converted_at && data.status !== 'blocked' &&
+            remoteNow(data) >= Date.parse(data.test.ends_at)) {
+            showRemoteOverlay('expired', 'ULTIMATE TEST завершён.', data);
+            return;
+        }
+        if (data.device_allowed === false) {
+            showRemoteOverlay(data.test_repeat_detected ? 'blocked' : 'device_limit',
+                data.message || 'Достигнут лимит устройств. Обратитесь к администратору.', data);
+            return;
+        }
+        const last = Number(data._received_at);
+        const liveTest = data.test && !data.test.converted_at && remoteNow(data) < Date.parse(data.test.ends_at);
+        if (data.status === 'active' && !liveTest && last && Date.now() - last > REMOTE_GRACE_MS) {
+            showRemoteOverlay('blocked', 'Не удалось подтвердить статус доступа. Повторите позже.', data);
+            return;
+        }
         if (data.status === 'active') removeRemoteOverlay();
-        else showRemoteOverlay(data.status, data.message || '');
+        else showRemoteOverlay(data.status, data.message || '', data);
     }
 
     async function checkRemoteStatus() {
@@ -1002,40 +1152,63 @@
         const key = remoteClientKey();
 
         // Пока клиент не привязан — не блокируем. Привязку делает админ.
-        if (!id || !key) return;
+        if (!id || !key) { remoteData = null; removeRemoteOverlay(); return; }
+        if (remoteChecking) return;
 
-        const url = REMOTE_API + '/v1/client/status?id=' +
-                    encodeURIComponent(id) + '&key=' + encodeURIComponent(key) +
-                    '&_=' + Date.now();
-
+        const device = detectDeviceInfo();
+        let requestScope = '';
+        let timeout = null;
+        let abort = null;
+        remoteChecking = true;
         try {
-            const r = await fetch(url, {cache:'no-store'});
+            requestScope = remoteScope();
+            const url = remoteApi() + '/v1/client/heartbeat?_=' + Date.now();
+            if (typeof AbortController !== 'undefined') {
+                abort = new AbortController();
+                timeout = setTimeout(function () { abort.abort(); }, 10000);
+            }
+            const r = await fetch(url, {
+                method: 'POST',
+                cache: 'no-store',
+                headers: {'Content-Type':'application/json'},
+                signal: abort ? abort.signal : undefined,
+                body: JSON.stringify({
+                    id: id,
+                    key: key,
+                    install_id: device.install_id,
+                    device_name: device.device_name,
+                    platform: device.platform,
+                    user_agent: device.user_agent
+                })
+            });
+            if (requestScope !== remoteScope()) return;
+            if (r.status === 401 || r.status === 403 || r.status === 404) {
+                applyRemoteStatus({id:id,status:'blocked',message:'Клиент не найден или ключ доступа изменён.'});
+                return;
+            }
             if (!r.ok) throw new Error('HTTP '+r.status);
             const data = await r.json();
+            if (!data || data.id !== id || !data.status) throw new Error('Invalid RMEDIA response');
+            if (requestScope !== remoteScope()) return;
             applyRemoteStatus(data);
         } catch(e) {
             console.warn('[RMEDIA Remote] status check failed', e);
 
-            // Last-known-blocked stays blocked.
             let cached = null;
             try { cached = JSON.parse(remoteGet(REMOTE_CACHE_KEY,'null')); } catch(e2) {}
-
-            if (cached && cached.status && cached.status !== 'active') {
-                showRemoteOverlay(cached.status, cached.message || '');
-                return;
+            try {
+                if (cached && cached._scope === remoteScope()) {
+                    remoteData = cached;
+                    renderRemoteStatus(cached);
+                } else if (!requestScope) {
+                    showRemoteOverlay('blocked', 'Проверьте адрес RMEDIA API в админских настройках.');
+                }
+            } catch(e2) {
+                showRemoteOverlay('blocked', 'Проверьте адрес RMEDIA API в админских настройках.');
             }
-
-            // Active clients get 24h grace during backend outage.
-            const last = parseInt(remoteGet(REMOTE_CACHE_TIME_KEY,'0'), 10) || 0;
-            if (cached && cached.status === 'active' && (Date.now() - last) <= REMOTE_GRACE_MS) {
-                removeRemoteOverlay();
-                return;
-            }
-
-            // After grace expires, verification is required.
-            if (cached && cached.status === 'active' && last) {
-                showRemoteOverlay('blocked', 'Не удалось подтвердить статус доступа. Повторите позже.');
-            }
+        } finally {
+            if (timeout) clearTimeout(timeout);
+            remoteChecking = false;
         }
     }
 
@@ -1055,6 +1228,15 @@
 
         Lampa.SettingsApi.addParam({
             component: 'rmedia_lock',
+            param: { name: REMOTE_API_KEY, type: 'input', values: '', default: '' },
+            field: {
+                name: 'RMEDIA API URL',
+                description: 'Полный проверенный адрес сервера. Пусто — адрес из сборки.'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
             param: { name: REMOTE_ID_KEY, type: 'input', values: '', default: 'не задано' },
             field: {
                 name: 'RMEDIA Client ID',
@@ -1070,14 +1252,49 @@
                 description: 'Секретный ключ клиента из панели RMEDIA Control'
             }
         });
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
+            param: { name: REMOTE_INSTALL_ID_KEY, type: 'input', values: '', default: '' },
+            field: {
+                name: 'RMEDIA Installation ID',
+                description: 'Уникальный ID этой установки. Создаётся автоматически.'
+            }
+        });
     }
 
     function initRemoteControl() {
         addRemoteAdminSettings();
+        try {
+            Lampa.Controller.add('rmedia_remote_lock', {
+                invisible: true,
+                toggle: function () {
+                    if (!remoteOverlay) return;
+                    Lampa.Controller.collectionSet(remoteOverlay);
+                    Lampa.Controller.collectionFocus(false, remoteOverlay);
+                },
+                back: focusRemoteOverlay,
+                up: focusRemoteOverlay,
+                down: focusRemoteOverlay,
+                left: focusRemoteOverlay,
+                right: focusRemoteOverlay
+            });
+        } catch(e) {}
+        try {
+            const cached = JSON.parse(remoteGet(REMOTE_CACHE_KEY, 'null'));
+            if (cached && cached._scope === remoteScope()) {
+                remoteData = cached;
+                renderRemoteStatus(cached);
+            }
+        } catch(e) {}
         checkRemoteStatus();
 
         if (remoteTimer) clearInterval(remoteTimer);
         remoteTimer = setInterval(checkRemoteStatus, 60 * 1000);
+        if (remoteClockTimer) clearInterval(remoteClockTimer);
+        remoteClockTimer = setInterval(function () {
+            try { if (remoteData) renderRemoteStatus(remoteData); } catch(e) {}
+        }, 1000);
 
         // Re-check when app returns to foreground / tab.
         document.addEventListener('visibilitychange', function(){
@@ -1226,7 +1443,6 @@
         watchSettings();
         hideRestrictedUI();
         bindSecretGesture();
-        bindSafePlayerButton();
         protectAdminClicks();
         bindMobileSettingsBackFix();
 
@@ -1251,7 +1467,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock v11.21 Pirate Plugins PIN Gate] Ready');
+        console.log('[RMEDIA Lock v11.21 Device Binding] Ready');
     }
 
     if (window.appready) {
