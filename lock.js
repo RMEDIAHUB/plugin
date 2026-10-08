@@ -393,6 +393,8 @@
 
     function collectPluginSettings() {
         const found = [];
+        const blockedComponents = /^(player|account|interface|channels|parser|server|tmdb|plugins|parent_control|parental|cache|cache_data|remote|remote_config|remote_configuration|other|online_mod|iptv|settings)$/i;
+        const blockedTitles = /^(аккаунт|account|интерфейс|interface|каналы|channels|парсер|parser|torrserver|tmdb|расширения|extensions|родительский контроль|parental control|кеш и данные|кэш и данные|cache and data|удал[её]нная конфигурация|remote configuration|остальное|other|онлайн мод|online mod|iptv|плеер|player)$/i;
         try {
             if (!Lampa.Settings || !Lampa.Settings.main) return found;
             const root = Lampa.Settings.main().render();
@@ -401,7 +403,7 @@
                 const component = String(item.attr('data-component') || '').trim();
                 const title = String(item.find('.settings-folder__name').text() || item.text() || '').trim();
                 if (!component || !title || isProtectedSettingsFolder(item)) return;
-                if (/^(player|account|interface|channels|parser|server|tmdb|plugins|parent_control|rmedia_client_menu)$/i.test(component)) return;
+                if (blockedComponents.test(component) || blockedTitles.test(title.toLowerCase())) return;
                 if (component.indexOf('rmedia_') === 0) return;
                 found.push({component: component, title: title});
             });
@@ -414,9 +416,22 @@
         });
     }
 
-    function leaveClientSettings(action) {
-        closeSettingsToContent();
-        setTimeout(action, 80);
+    function openClientComponent(component) {
+        try {
+            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                Lampa.Controller.toggle('settings');
+            }
+            setTimeout(function () {
+                try {
+                    Lampa.Settings.create(component, {onBack: closeSettingsToContent});
+                } catch (e) {
+                    closeSettingsToContent();
+                    try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Не удалось открыть раздел: ' + component); } catch (err) {}
+                }
+            }, 80);
+        } catch (e) {
+            closeSettingsToContent();
+        }
     }
 
     function addClientMenuSettings() {
@@ -439,7 +454,7 @@
         }
 
         addButton('rmedia_client_player', '▶　Плеер', function () {
-            leaveClientSettings(function () { Lampa.Settings.create('player', {onBack: closeSettingsToContent}); });
+            openClientComponent('player');
         });
         addButton('rmedia_client_sync', '↻　Синхронизация', function () {
             leaveClientSettings(openSafeSync);
@@ -450,9 +465,7 @@
 
         collectPluginSettings().forEach(function (plugin, index) {
             addButton('rmedia_client_plugin_' + index, '🧩　' + plugin.title, function () {
-                leaveClientSettings(function () {
-                    Lampa.Settings.create(plugin.component, {onBack: closeSettingsToContent});
-                });
+                openClientComponent(plugin.component);
             });
         });
     }
