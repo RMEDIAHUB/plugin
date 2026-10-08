@@ -22,6 +22,7 @@
     let menuPinBusy = false;
     let remoteUpPresses = [];
     let suppressNextSyncEnter = false;
+    let clientMenuRegistered = false;
 
     function storageGet(name, fallback) {
         try {
@@ -348,7 +349,7 @@
     }
 
     function bindSafePlayerButton() {
-        // Keep the existing, known-good client shortcut: open the native Player page.
+        // Open a native Lampa settings component that contains only approved items.
         let openingTimer = null;
 
         $(document)
@@ -371,9 +372,10 @@
                         if (!isEnabled() || unlocked) return;
                         try {
                             if (Lampa.Settings && typeof Lampa.Settings.create === 'function') {
-                                Lampa.Settings.create('player', {
-                                    onBack: closeSettingsToContent
-                                });
+                                if (Lampa.Settings.main && Lampa.Settings.main().render) {
+                                    Lampa.Settings.main().render().detach();
+                                }
+                                Lampa.Settings.create('rmedia_client_menu');
                             }
                         } catch (err) {
                             try {
@@ -387,6 +389,120 @@
                     return false;
                 }
             );
+    }
+
+    function collectPluginSettings() {
+        const found = [];
+        try {
+            if (!Lampa.Settings || !Lampa.Settings.main) return found;
+            const root = Lampa.Settings.main().render();
+            root.find('.settings-folder[data-component]').each(function () {
+                const item = $(this);
+                const component = String(item.attr('data-component') || '').trim();
+                const title = String(item.find('.settings-folder__name').text() || item.text() || '').trim();
+                if (!component || !title || isProtectedSettingsFolder(item)) return;
+                if (/^(player|account|interface|channels|parser|server|tmdb|plugins|parent_control|rmedia_client_menu)$/i.test(component)) return;
+                if (component.indexOf('rmedia_') === 0) return;
+                found.push({component: component, title: title});
+            });
+        } catch (e) {}
+        const seen = {};
+        return found.filter(function (plugin) {
+            if (seen[plugin.component]) return false;
+            seen[plugin.component] = true;
+            return true;
+        });
+    }
+
+    function leaveClientSettings(action) {
+        closeSettingsToContent();
+        setTimeout(action, 80);
+    }
+
+    function addClientMenuSettings() {
+        if (clientMenuRegistered || !window.Lampa || !Lampa.SettingsApi) return;
+        clientMenuRegistered = true;
+
+        Lampa.SettingsApi.addComponent({
+            component: 'rmedia_client_menu',
+            name: 'Настройки',
+            icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94a7.5 7.5 0 0 0 .05-.94 7.5 7.5 0 0 0-.05-.94l2.03-1.58-1.92-3.32-2.39.96a7.2 7.2 0 0 0-1.63-.94L14.87 3h-3.84l-.36 3.18a7.2 7.2 0 0 0-1.63.94l-2.39-.96-1.92 3.32 2.03 1.58a7.5 7.5 0 0 0-.05.94 7.5 7.5 0 0 0 .05.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.4 1.05.72 1.63.94l.36 3.18h3.84l.36-3.18a7.2 7.2 0 0 0 1.63-.94l2.39.96 1.92-3.32-2.03-1.58ZM12.95 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>'
+        });
+
+        function addButton(name, title, callback) {
+            Lampa.SettingsApi.addParam({
+                component: 'rmedia_client_menu',
+                param: {name: name, type: 'button'},
+                field: {name: title},
+                onChange: callback
+            });
+        }
+
+        addButton('rmedia_client_player', '▶　Плеер', function () {
+            leaveClientSettings(function () { Lampa.Settings.create('player', {onBack: closeSettingsToContent}); });
+        });
+        addButton('rmedia_client_sync', '↻　Синхронизация', function () {
+            leaveClientSettings(openSafeSync);
+        });
+        addButton('rmedia_client_speed', '🚀　Тест скорости сервера', function () {
+            leaveClientSettings(runServerSpeedTest);
+        });
+
+        collectPluginSettings().forEach(function (plugin, index) {
+            addButton('rmedia_client_plugin_' + index, '🧩　' + plugin.title, function () {
+                leaveClientSettings(function () {
+                    Lampa.Settings.create(plugin.component, {onBack: closeSettingsToContent});
+                });
+            });
+        });
+    }
+
+    function runServerSpeedTest() {
+        let complete = false;
+        const attempt = function () {
+            if (complete) return false;
+            const candidates = $('.settings__body').find('.selector, .settings-param, .settings-param__item').filter(function () {
+                const label = String($(this).text() || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                return label === 'тестировать скорость' || label.indexOf('тестировать скорость') === 0 || label.indexOf('test speed') === 0;
+            });
+            if (!candidates.length) return false;
+            complete = true;
+            $('.settings__body').find('.settings-param, .settings-param__item').hide();
+            candidates.first().show();
+            candidates.first().trigger('hover:enter');
+            return true;
+        };
+        const fail = function () {
+            if (complete) return;
+            complete = true;
+            closeSettingsToContent();
+            try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Не удалось найти тест скорости в этой версии TorrServer'); } catch (e) {}
+        };
+        try {
+            if (Lampa.Settings.listener && Lampa.Settings.listener.follow) {
+                const onOpen = function (e) {
+                    if (!e || e.name !== 'server') return;
+                    Lampa.Settings.listener.remove && Lampa.Settings.listener.remove('open', onOpen);
+                    let tries = 0;
+                    const timer = setInterval(function () {
+                        if (attempt() || ++tries >= 20) {
+                            clearInterval(timer);
+                            if (!complete) fail();
+                        }
+                    }, 150);
+                };
+                Lampa.Settings.listener.follow('open', onOpen);
+            }
+            Lampa.Settings.create('server', {onBack: closeSettingsToContent});
+            let tries = 0;
+            const timer = setInterval(function () {
+                if (attempt() || ++tries > 20) {
+                    clearInterval(timer);
+                    if (!complete) fail();
+                }
+            }, 150);
+            setTimeout(fail, 3500);
+        } catch (e) { fail(); }
     }
 
     function protectAdminClicks() {
@@ -1475,6 +1591,7 @@
     function init() {
         installIphoneCardLayout();
         addAdminSettings();
+        addClientMenuSettings();
         guardConsoleController();
         hideClientHeadExtras();
         initRemoteControl();
@@ -1509,7 +1626,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock TEST48 + Device Binding + Player] Ready');
+        console.log('[RMEDIA Lock TEST48 + Device Binding + Client Settings] Ready');
     }
 
     if (window.appready) {
