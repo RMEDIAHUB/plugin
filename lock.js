@@ -22,8 +22,6 @@
     let menuPinBusy = false;
     let remoteUpPresses = [];
     let suppressNextSyncEnter = false;
-    let clientMenuRoot = null;
-    let clientMenuBusy = false;
 
     function storageGet(name, fallback) {
         try {
@@ -350,7 +348,8 @@
     }
 
     function bindSafePlayerButton() {
-        // Replace the standard Settings screen with a client-safe menu.
+        // Restore the client shortcut from the previous GitHub version.
+        // Lampa builds its native Player options for the current platform.
         let openingTimer = null;
 
         $(document)
@@ -366,6 +365,14 @@
                         e.stopImmediatePropagation();
                     }
 
+                    try {
+                        // The native header handler opens Settings first.
+                        // Detach its main menu before creating Player.
+                        if (Lampa.Settings && Lampa.Settings.main && Lampa.Settings.main().render) {
+                            Lampa.Settings.main().render().detach();
+                        }
+                    } catch (err) {}
+
                     // Touch can send both hover:enter and click for one press.
                     if (openingTimer !== null) clearTimeout(openingTimer);
                     openingTimer = setTimeout(function () {
@@ -373,7 +380,9 @@
                         if (!isEnabled() || unlocked) return;
                         try {
                             if (Lampa.Settings && typeof Lampa.Settings.create === 'function') {
-                                openClientMenu();
+                                Lampa.Settings.create('player', {
+                                    onBack: closeSettingsToContent
+                                });
                             }
                         } catch (err) {
                             try {
@@ -387,125 +396,6 @@
                     return false;
                 }
             );
-    }
-
-    function safeText(value) {
-        return String(value || '').replace(/[&<>"']/g, function (c) {
-            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c];
-        });
-    }
-
-    function collectPluginSettings() {
-        const found = [];
-        try {
-            if (!Lampa.Settings || !Lampa.Settings.main) return found;
-            const root = Lampa.Settings.main().render();
-            root.find('.settings-folder[data-component]').each(function () {
-                const item = $(this);
-                const component = String(item.attr('data-component') || '').trim();
-                const title = String(item.find('.settings-folder__name').text() || item.text() || '').trim();
-                if (!component || !title || isProtectedSettingsFolder(item)) return;
-                if (/^(player|account|interface|channels|parser|server|tmdb|plugins|parent_control)$/i.test(component)) return;
-                if (component.indexOf('rmedia_') === 0) return;
-                found.push({component: component, title: title});
-            });
-        } catch (e) {}
-        const seen = {};
-        return found.filter(function (plugin) {
-            if (seen[plugin.component]) return false;
-            seen[plugin.component] = true;
-            return true;
-        });
-    }
-
-    function closeClientMenu() {
-        if (clientMenuRoot) {
-            clientMenuRoot.remove();
-            clientMenuRoot = null;
-        }
-        closeSettingsToContent();
-    }
-
-    function openClientMenu() {
-        if (!window.Lampa || !Lampa.Settings || !Lampa.Controller) return;
-        if (clientMenuRoot) clientMenuRoot.remove();
-        const plugins = collectPluginSettings();
-        clientMenuRoot = $('<div class="settings rmedia-client-menu"><div class="settings__head"><div class="settings__title">Настройки</div></div><div class="settings__body rmedia-client-menu__body"></div></div>');
-        const body = clientMenuRoot.find('.rmedia-client-menu__body');
-        body.append('<div class="settings-folder selector" data-rmedia-action="player"><div class="settings-folder__name">▶　Плеер</div></div>');
-        body.append('<div class="settings-folder selector" data-rmedia-action="sync"><div class="settings-folder__name">↻　Синхронизация</div></div>');
-        body.append('<div class="settings-folder selector" data-rmedia-action="speed"><div class="settings-folder__name">🚀　Тест скорости сервера</div></div>');
-        plugins.forEach(function (plugin) {
-            body.append('<div class="settings-folder selector" data-rmedia-plugin="' + safeText(plugin.component) + '"><div class="settings-folder__name">🧩　' + safeText(plugin.title) + '</div></div>');
-        });
-        $('body').append(clientMenuRoot).addClass('settings--open');
-        Lampa.Controller.add('rmedia_client_menu', {
-            invisible: true,
-            toggle: function () {
-                if (!clientMenuRoot) return;
-                const list = clientMenuRoot.find('.rmedia-client-menu__body');
-                Lampa.Controller.collectionSet(list);
-                Lampa.Controller.collectionFocus(false, list);
-            },
-            back: closeClientMenu
-        });
-        Lampa.Controller.toggle('rmedia_client_menu');
-        body.find('.settings-folder').on('hover:enter.rmedia-client-menu click.rmedia-client-menu', function (e) {
-            if (!isEnabled() || unlocked || clientMenuBusy) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            clientMenuBusy = true;
-            const item = $(this);
-            const action = item.attr('data-rmedia-action');
-            const component = item.attr('data-rmedia-plugin');
-            closeClientMenu();
-            if (action === 'player') Lampa.Settings.create('player', {onBack: closeSettingsToContent});
-            else if (action === 'sync') openSafeSync();
-            else if (action === 'speed') runServerSpeedTest();
-            else if (component) Lampa.Settings.create(component, {onBack: closeSettingsToContent});
-            setTimeout(function () { clientMenuBusy = false; }, 700);
-            return false;
-        });
-    }
-
-    function runServerSpeedTest() {
-        let complete = false;
-        const attempt = function () {
-            if (complete) return false;
-            const candidates = $('.settings__body').find('.selector, .settings-param, .settings-param__item').filter(function () {
-                const label = String($(this).text() || '').replace(/\s+/g, ' ').trim().toLowerCase();
-                return label === 'тестировать скорость' || label.indexOf('тестировать скорость') === 0;
-            }).filter(':visible');
-            if (!candidates.length) return false;
-            complete = true;
-            candidates.first().trigger('hover:enter');
-            return true;
-        };
-        const fail = function () {
-            if (complete) return;
-            complete = true;
-            closeSettingsToContent();
-            try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Не удалось найти тест скорости в этой версии TorrServer'); } catch (e) {}
-        };
-        try {
-            if (Lampa.Settings.listener && Lampa.Settings.listener.follow) {
-                const onOpen = function (e) {
-                    if (!e || e.name !== 'server') return;
-                    Lampa.Settings.listener.remove && Lampa.Settings.listener.remove('open', onOpen);
-                    let tries = 0;
-                    const timer = setInterval(function () {
-                        if (attempt() || ++tries >= 20) {
-                            clearInterval(timer);
-                            if (!complete) fail();
-                        }
-                    }, 150);
-                };
-                Lampa.Settings.listener.follow('open', onOpen);
-            }
-            Lampa.Settings.create('server', {onBack: closeSettingsToContent});
-            setTimeout(function () { if (!complete && attempt()) return; }, 500);
-            setTimeout(fail, 3500);
-        } catch (e) { fail(); }
     }
 
     function protectAdminClicks() {
