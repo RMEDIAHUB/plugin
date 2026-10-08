@@ -695,6 +695,11 @@
         safeSyncOpening = false;
         safeSyncAccountReached = false;
 
+        // Android TV/phone navigation can retain the old Head button list
+        // after Settings is detached. Rebuilding it lets the gear respond
+        // again when the user opens the client menu a second time.
+        const settingsWasOpen = !!clientMenuPageOpen;
+
         try {
             if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
                 Lampa.Controller.toggle('content');
@@ -709,6 +714,14 @@
                 }
                 hideRestrictedUI();
                 hideClientHeadExtras();
+
+                if (settingsWasOpen && Lampa.Controller && Lampa.Controller.enabled &&
+                    typeof Lampa.Controller.toggle === 'function') {
+                    const enabled = Lampa.Controller.enabled();
+                    if (enabled && enabled.name === 'head') {
+                        Lampa.Controller.toggle('head');
+                    }
+                }
             } catch (e) {}
         }, 0);
     }
