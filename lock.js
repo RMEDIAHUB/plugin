@@ -23,8 +23,7 @@
     let remoteUpPresses = [];
     let suppressNextSyncEnter = false;
     let clientMenuRegistered = false;
-    let returnToClientMenu = false;
-    let clientMenuPageOpen = false;
+    let authorizedSettingsSession = false;
 
     function storageGet(name, fallback) {
         try {
@@ -351,46 +350,36 @@
     }
 
     function bindSafePlayerButton() {
-        // Open a native Lampa settings component that contains only approved items.
-        let openingTimer = null;
-
+        // Keep the native gear and native settings screen. Require the menu PIN
+        // before temporarily showing the full list of settings sections.
         $(document)
             .off('click.rmedia-player hover:enter.rmedia-player', '.open--settings')
-            .on(
-                'click.rmedia-player hover:enter.rmedia-player',
-                '.open--settings',
-                function (e) {
-                    if (!isEnabled() || unlocked) return;
+            .on('click.rmedia-player hover:enter.rmedia-player', '.open--settings', function (e) {
+                if (!isEnabled() || unlocked || authorizedSettingsSession) return;
 
-                    if (e) {
-                        e.preventDefault();
-                        e.stopImmediatePropagation();
-                    }
-
-                    // Touch can send both hover:enter and click for one press.
-                    if (openingTimer !== null) clearTimeout(openingTimer);
-                    openingTimer = setTimeout(function () {
-                        openingTimer = null;
-                        if (!isEnabled() || unlocked) return;
-                        try {
-                            if (Lampa.Settings && typeof Lampa.Settings.create === 'function') {
-                                if (Lampa.Settings.main && Lampa.Settings.main().render) {
-                                    Lampa.Settings.main().render().detach();
-                                }
-                                Lampa.Settings.create('rmedia_client_menu');
-                            }
-                        } catch (err) {
-                            try {
-                                if (Lampa.Noty && Lampa.Noty.show) {
-                                    Lampa.Noty.show('Не удалось открыть Плеер');
-                                }
-                            } catch (e2) {}
-                        }
-                    }, 30);
-
-                    return false;
+                if (e) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
                 }
-            );
+
+                askMenuPin(openAuthorizedSettings);
+
+                return false;
+            });
+    }
+
+    function openAuthorizedSettings() {
+        authorizedSettingsSession = true;
+        showRestrictedUI();
+
+        try {
+            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                Lampa.Controller.toggle('settings');
+            }
+        } catch (err) {
+            authorizedSettingsSession = false;
+            hideRestrictedUI();
+        }
     }
 
     function collectPluginSettings() {
@@ -419,8 +408,6 @@
     }
 
     function openClientComponent(component) {
-        returnToClientMenu = true;
-        clientMenuPageOpen = false;
         try {
             if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
                 Lampa.Controller.toggle('settings');
@@ -448,43 +435,10 @@
     }
 
     function addClientMenuSettings() {
-        if (clientMenuRegistered || !window.Lampa || !Lampa.SettingsApi) return;
+        // The client menu has been retired: the gear now opens Lampa's native
+        // Settings list after PIN authorization. Keep this function as a no-op
+        // because init() still calls it in older plugin layouts.
         clientMenuRegistered = true;
-
-        Lampa.SettingsApi.addComponent({
-            component: 'rmedia_client_menu',
-            name: 'Настройки',
-            icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94a7.5 7.5 0 0 0 .05-.94 7.5 7.5 0 0 0-.05-.94l2.03-1.58-1.92-3.32-2.39.96a7.2 7.2 0 0 0-1.63-.94L14.87 3h-3.84l-.36 3.18a7.2 7.2 0 0 0-1.63.94l-2.39-.96-1.92 3.32 2.03 1.58a7.5 7.5 0 0 0-.05.94 7.5 7.5 0 0 0 .05.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.4 1.05.72 1.63.94l.36 3.18h3.84l.36-3.18a7.2 7.2 0 0 0 1.63-.94l2.39.96 1.92-3.32-2.03-1.58ZM12.95 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>'
-        });
-
-        function addButton(name, title, callback) {
-            Lampa.SettingsApi.addParam({
-                component: 'rmedia_client_menu',
-                param: {name: name, type: 'button'},
-                field: {name: title},
-                onChange: callback
-            });
-        }
-
-        addButton('rmedia_client_player', '▶　Плеер', function () {
-            openClientComponent('player');
-        });
-        addButton('rmedia_client_sync', '↻　Синхронизация', function () {
-            returnToClientMenu = true;
-            clientMenuPageOpen = false;
-            leaveClientSettings(openSafeSync);
-        });
-        addButton('rmedia_client_speed', '🚀　Тест скорости сервера', function () {
-            returnToClientMenu = true;
-            clientMenuPageOpen = false;
-            leaveClientSettings(runServerSpeedTest);
-        });
-
-        collectPluginSettings().forEach(function (plugin, index) {
-            addButton('rmedia_client_plugin_' + index, '🧩　' + plugin.title, function () {
-                openClientComponent(plugin.component);
-            });
-        });
     }
 
     function runServerSpeedTest() {
@@ -694,12 +648,14 @@
     function closeSettingsToContent() {
         safeSyncOpening = false;
         safeSyncAccountReached = false;
+        const settingsWasOpen = authorizedSettingsSession;
+        authorizedSettingsSession = false;
+
+        if (isEnabled() && !unlocked) hideRestrictedUI();
 
         // Android TV/phone navigation can retain the old Head button list
         // after Settings is detached. Rebuilding it lets the gear respond
         // again when the user opens the client menu a second time.
-        const settingsWasOpen = !!clientMenuPageOpen;
-
         try {
             if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
                 Lampa.Controller.toggle('content');
@@ -930,29 +886,22 @@
         try {
             if (Lampa.Settings && Lampa.Settings.listener && Lampa.Settings.listener.follow) {
                 Lampa.Settings.listener.follow('open', function (e) {
-                    if (e && e.name === 'rmedia_client_menu') {
-                        clientMenuPageOpen = true;
-                    }
-
-                    if (e && e.name === 'main' && returnToClientMenu && isEnabled() && !unlocked) {
-                        returnToClientMenu = false;
-                        clientMenuPageOpen = false;
+                    if (e && e.name === 'main' && !unlocked && !authorizedSettingsSession) {
+                        // Native Back can close the settings overlay without
+                        // calling our explicit back handler. Relock the list
+                        // when returning to content, but leave it open for
+                        // back navigation from a tab while settings stay up.
                         setTimeout(function () {
-                            try {
-                                if (Lampa.Settings && Lampa.Settings.main && Lampa.Settings.main().render) {
-                                    Lampa.Settings.main().render().detach();
-                                }
-                                Lampa.Settings.create('rmedia_client_menu');
-                            } catch (err) {
-                                closeSettingsToContent();
+                            if (!$('body').hasClass('settings--open')) {
+                                authorizedSettingsSession = false;
+                                hideRestrictedUI();
                             }
-                        }, 30);
-                        return;
+                        }, 0);
                     }
 
-                    if (e && e.name === 'main' && clientMenuPageOpen && isEnabled() && !unlocked) {
-                        clientMenuPageOpen = false;
-                        closeSettingsToContent();
+                    if (e && e.name === 'main' && authorizedSettingsSession) {
+                        // Back from a section to the native Settings list:
+                        // keep all tabs visible for this authorized session.
                         return;
                     }
 
