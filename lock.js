@@ -434,6 +434,15 @@
         }
     }
 
+    function leaveClientSettings(action) {
+        closeSettingsToContent();
+        setTimeout(function () {
+            try { action(); } catch (e) {
+                try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Не удалось открыть пункт меню'); } catch (err) {}
+            }
+        }, 80);
+    }
+
     function addClientMenuSettings() {
         if (clientMenuRegistered || !window.Lampa || !Lampa.SettingsApi) return;
         clientMenuRegistered = true;
