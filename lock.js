@@ -348,8 +348,7 @@
     }
 
     function bindSafePlayerButton() {
-        // Restore the client shortcut from the previous GitHub version.
-        // Lampa builds its native Player options for the current platform.
+        // Keep the existing, known-good client shortcut: open the native Player page.
         let openingTimer = null;
 
         $(document)
@@ -364,14 +363,6 @@
                         e.preventDefault();
                         e.stopImmediatePropagation();
                     }
-
-                    try {
-                        // The native header handler opens Settings first.
-                        // Detach its main menu before creating Player.
-                        if (Lampa.Settings && Lampa.Settings.main && Lampa.Settings.main().render) {
-                            Lampa.Settings.main().render().detach();
-                        }
-                    } catch (err) {}
 
                     // Touch can send both hover:enter and click for one press.
                     if (openingTimer !== null) clearTimeout(openingTimer);
