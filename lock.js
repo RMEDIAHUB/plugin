@@ -23,6 +23,8 @@
     let remoteUpPresses = [];
     let suppressNextSyncEnter = false;
     let clientMenuRegistered = false;
+    let returnToClientMenu = false;
+    let clientMenuPageOpen = false;
 
     function storageGet(name, fallback) {
         try {
@@ -417,6 +419,8 @@
     }
 
     function openClientComponent(component) {
+        returnToClientMenu = true;
+        clientMenuPageOpen = false;
         try {
             if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
                 Lampa.Controller.toggle('settings');
@@ -466,9 +470,13 @@
             openClientComponent('player');
         });
         addButton('rmedia_client_sync', '↻　Синхронизация', function () {
+            returnToClientMenu = true;
+            clientMenuPageOpen = false;
             leaveClientSettings(openSafeSync);
         });
         addButton('rmedia_client_speed', '🚀　Тест скорости сервера', function () {
+            returnToClientMenu = true;
+            clientMenuPageOpen = false;
             leaveClientSettings(runServerSpeedTest);
         });
 
@@ -909,6 +917,32 @@
         try {
             if (Lampa.Settings && Lampa.Settings.listener && Lampa.Settings.listener.follow) {
                 Lampa.Settings.listener.follow('open', function (e) {
+                    if (e && e.name === 'rmedia_client_menu') {
+                        clientMenuPageOpen = true;
+                    }
+
+                    if (e && e.name === 'main' && returnToClientMenu && isEnabled() && !unlocked) {
+                        returnToClientMenu = false;
+                        clientMenuPageOpen = false;
+                        setTimeout(function () {
+                            try {
+                                if (Lampa.Settings && Lampa.Settings.main && Lampa.Settings.main().render) {
+                                    Lampa.Settings.main().render().detach();
+                                }
+                                Lampa.Settings.create('rmedia_client_menu');
+                            } catch (err) {
+                                closeSettingsToContent();
+                            }
+                        }, 30);
+                        return;
+                    }
+
+                    if (e && e.name === 'main' && clientMenuPageOpen && isEnabled() && !unlocked) {
+                        clientMenuPageOpen = false;
+                        closeSettingsToContent();
+                        return;
+                    }
+
                     if (e && e.name === 'main') {
                         setTimeout(bindExtensionsGate, 0);
                         setTimeout(bindExtensionsGate, 120);
