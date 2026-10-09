@@ -45,8 +45,8 @@
     }
 
     function getPin() {
-        let pin = String(storageGet(PIN_KEY, '1111') || '1111').trim();
-        if (!/^\d{4,8}$/.test(pin)) pin = '1111';
+        let pin = String(storageGet(PIN_KEY, '2580') || '2580').trim();
+        if (!/^\d{4,8}$/.test(pin)) pin = '2580';
         return pin;
     }
 
