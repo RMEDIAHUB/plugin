@@ -606,7 +606,7 @@
                     e.stopImmediatePropagation();
                 }
 
-                askMenuPin(function () {
+                askPin(function () {
                     openProtectedComponent(component);
                 });
 
@@ -634,7 +634,7 @@
                 e.preventDefault();
                 e.stopImmediatePropagation();
 
-                askMenuPin(function () {
+                askPin(function () {
                     openProtectedComponent(component);
                 });
 
@@ -722,7 +722,7 @@
                 e.stopImmediatePropagation();
             }
 
-            askMenuPin(function () {
+            askPin(function () {
                 try {
                     Lampa.Extensions.show();
                 } catch (err) {
