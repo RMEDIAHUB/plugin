@@ -1,7 +1,7 @@
 /**
  * RMEDIA Online for Lampa
  * Unified source menu over Online Mod, Filmix and an installed KinoPub engine.
- * Version: 4.0.0
+ * Version: 4.0.1
  */
 (function () {
     'use strict';
@@ -9,7 +9,7 @@
     if (window.rmedia_online_ready) return;
     window.rmedia_online_ready = true;
 
-    var VERSION = '4.0.0';
+    var VERSION = '4.0.1';
     var UPSTREAM = 'https://nb557.github.io/plugins/online_mod.js';
     var DEFAULT_FREE = 'cdnvideohub';
     var lastMovie = null;
@@ -100,7 +100,8 @@
     function kinoEngineButton() {
         return fullButtons().find(function (node) {
             if (node.hasAttribute('data-rmedia-source')) return false;
-            return /kinopub|bwarc/i.test(textOf(node)) || /kinopub|bwarc/i.test(node.className || '');
+            var source = [textOf(node), node.className, node.getAttribute('data-source'), node.getAttribute('data-component')].join(' ');
+            return /(^|[^a-z0-9])(?:bwa(?:[\s._-]*rc)?|kino[\s._-]*pub)(?=$|[^a-z0-9])/i.test(source);
         });
     }
 

@@ -2,7 +2,7 @@
  * RMEDIA Tweaks for Lampa
  * Небольшие улучшения интерфейса без рекламы, аналитики и внешних запросов.
  *
- * Version: 1.1.1
+ * Version: 1.1.2
  * License: MIT
  */
 (function () {
@@ -13,7 +13,7 @@
 
   var ID = 'rmediahub_tweaks';
   var NAME = 'RMEDIA Tweaks';
-  var VERSION = '1.1.1';
+  var VERSION = '1.1.2';
   var observer = null;
   var refreshTimer = null;
   var clockTimer = null;
@@ -167,16 +167,20 @@
         var itemTitle = item.querySelector('.selectbox-item__title');
         var itemSubtitle = item.querySelector('.selectbox-item__subtitle');
         var subtitle = String(itemSubtitle ? itemSubtitle.textContent : '').trim().toLowerCase();
-
-        if (itemTitle && /online_mod/.test(subtitle)) itemTitle.textContent = 'FILMIX';
-        else if (itemTitle && /bwarc/.test(subtitle)) itemTitle.textContent = 'KINOPUB';
-
         var text = String(itemTitle ? itemTitle.textContent : '').trim().toLowerCase();
+        // BWA can omit the old BwaRC subtitle. Check the label and source markers too.
+        var source = [text, subtitle, item.className, item.getAttribute('data-source'), item.getAttribute('data-component')].join(' ');
+        var kino = /(^|[^a-z0-9])(?:bwa(?:[\s._-]*rc)?|kino[\s._-]*pub)(?=$|[^a-z0-9])/i.test(source);
+        var label = /online_mod/.test(subtitle) ? 'FILMIX' : kino ? 'KINOPUB' : '';
+
+        // Avoid triggering the DOM observer again when the label is already correct.
+        if (itemTitle && label && itemTitle.textContent !== label) itemTitle.textContent = label;
+        if (label) text = label.toLowerCase();
 
         item.classList.remove('rm-source-torrent', 'rm-source-online', 'rm-source-trailer');
 
         if (/^(торрент|torrent)/.test(text)) item.classList.add('rm-source-torrent');
-        else if (/^(онлайн|online|filmix|kinopub)/.test(text) || /online_mod|bwarc/.test(subtitle)) item.classList.add('rm-source-online');
+        else if (/^(онлайн|online|filmix|kinopub)/.test(text) || /online_mod/.test(subtitle) || kino) item.classList.add('rm-source-online');
         else if (/^(трейлер|трейлеры|трейлери|trailer)/.test(text)) item.classList.add('rm-source-trailer');
       });
     });
@@ -441,7 +445,7 @@
   function observe() {
     if (observer || !window.MutationObserver || !document.body) return;
     observer = new MutationObserver(scheduleApply);
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
   }
 
   function start() {
