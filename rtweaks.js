@@ -2,7 +2,7 @@
  * RMEDIA Tweaks for Lampa
  * Небольшие улучшения интерфейса без рекламы, аналитики и внешних запросов.
  *
- * Version: 1.1.2
+ * Version: 1.1.3
  * License: MIT
  */
 (function () {
@@ -13,7 +13,7 @@
 
   var ID = 'rmediahub_tweaks';
   var NAME = 'RMEDIA Tweaks';
-  var VERSION = '1.1.2';
+  var VERSION = '1.1.3';
   var observer = null;
   var refreshTimer = null;
   var clockTimer = null;
@@ -131,6 +131,7 @@
       'background:transparent!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-trailer{',
       'background:transparent!important}',
+      '.selectbox[data-rmedia-source-box="1"] .rm-tweaks-filmix-subtitle{display:none!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-torrent .selectbox-item__icon{color:#30d158!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-online .selectbox-item__icon{color:#4aa3ff!important}',
       '.selectbox[data-rmedia-source-box="1"] .rm-source-trailer .selectbox-item__icon{color:#ff6961!important}',
@@ -159,6 +160,9 @@
         box.querySelectorAll('.rm-source-torrent,.rm-source-online,.rm-source-trailer').forEach(function (item) {
           item.classList.remove('rm-source-torrent', 'rm-source-online', 'rm-source-trailer');
         });
+        box.querySelectorAll('.rm-tweaks-filmix-subtitle').forEach(function (subtitle) {
+          subtitle.classList.remove('rm-tweaks-filmix-subtitle');
+        });
         return;
       }
 
@@ -176,6 +180,7 @@
         // Avoid triggering the DOM observer again when the label is already correct.
         if (itemTitle && label && itemTitle.textContent !== label) itemTitle.textContent = label;
         if (label) text = label.toLowerCase();
+        if (itemSubtitle) itemSubtitle.classList.toggle('rm-tweaks-filmix-subtitle', text === 'filmix');
 
         item.classList.remove('rm-source-torrent', 'rm-source-online', 'rm-source-trailer');
 
