@@ -1017,10 +1017,9 @@
 
 
     // ===== RMEDIA REMOTE CONTROL v11 =====
-    const REMOTE_API = 'http://178.105.179.72:8787';
-    // Migration target: 2.28.75.180. The public port/protocol must be verified
-    // from docker-compose / reverse-proxy configuration before changing this.
-    // Set a verified full URL here for all installations, or in admin settings.
+    // HTTPS endpoint verified with live Lampa heartbeat/CORS on 2026-10-12.
+    const REMOTE_API = 'https://admin.rmediahub.app';
+    const REMOTE_API_LEGACY = 'http://178.105.179.72:8787';
     const REMOTE_API_VERIFIED = '';
     const REMOTE_API_KEY = 'rmedia_remote_api_url';
     const REMOTE_ID_KEY = 'rmedia_remote_client_id';
@@ -1045,11 +1044,29 @@
         if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
             throw new Error('Invalid RMEDIA API URL');
         }
-        return candidate.replace(/\/+$/, '');
+        const normalized = candidate.replace(/\/+$/, '');
+        // CUB imports may retain an explicit legacy endpoint. Migrate only that
+        // exact address; leave customer IDs, keys and device bindings unchanged.
+        if (normalized === REMOTE_API_LEGACY) {
+            remoteSet(REMOTE_API_KEY, REMOTE_API);
+            return REMOTE_API;
+        }
+        return normalized;
     }
 
     function remoteScope() {
         return remoteClientId() + ':' + remoteClientKey() + ':' + makeInstallId() + ':' + remoteApi();
+    }
+
+    function remoteScopeMatches(scope) {
+        const current = remoteScope();
+        if (scope === current) return true;
+        // Preserve the same installation's cached status during this endpoint
+        // migration, including blocked/device-denied states and original times.
+        // A different ID, key, installation or custom API must never match.
+        if (remoteApi() !== REMOTE_API) return false;
+        const prefix = remoteClientId() + ':' + remoteClientKey() + ':' + makeInstallId() + ':';
+        return scope === prefix + REMOTE_API_LEGACY;
     }
 
     function remoteNow(data) {
@@ -1295,7 +1312,7 @@
 
     function renderRemoteStatus(data) {
         if (!data) return;
-        if (data._scope !== remoteScope()) {
+        if (!remoteScopeMatches(data._scope)) {
             remoteData = null;
             removeRemoteOverlay();
             return;
@@ -1372,7 +1389,7 @@
             let cached = null;
             try { cached = JSON.parse(remoteGet(REMOTE_CACHE_KEY,'null')); } catch(e2) {}
             try {
-                if (cached && cached._scope === remoteScope()) {
+                if (cached && remoteScopeMatches(cached._scope)) {
                     remoteData = cached;
                     renderRemoteStatus(cached);
                 } else if (!requestScope) {
