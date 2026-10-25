@@ -1,5 +1,5 @@
 /*!
- * RMediaHub KinoPub Direct v0.3.2 — MIT, Copyright (c) 2026 RMEDIAHUB.
+ * RMediaHub KinoPub Direct v0.3.3 — MIT, Copyright (c) 2026 RMEDIAHUB.
  * Install: one static JavaScript URL. No RMediaHub server, BWA or third-party proxy.
  * KinoPub OAuth uses the publicly distributed xbmc application client from
  * https://github.com/quarckster/kodi.kino.pub/blob/master/src/resources/lib/auth.py
@@ -2428,7 +2428,7 @@ function createRMediaHubDirect(options) {
         } else request();
     }
     function notify(s,done) {
-        api(s,'POST','device/notify',{title:'RMediaHub · Lampa',hardware:'Lampa',software:'RMediaHub Direct/0.3.2'},function(err) {
+        api(s,'POST','device/notify',{title:'RMediaHub · Lampa',hardware:'Lampa',software:'RMediaHub Direct/0.3.3'},function(err) {
             s.notifyError=err || null;save(s);done(null,snapshot(s));
         });
     }
@@ -2546,7 +2546,9 @@ function createRMediaHubDirect(options) {
         return (video.audios || []).map(function(a,position) {
             var lang=text(a.lang).toLowerCase(), type=text(a.type && a.type.title), author=text(a.author && a.author.title);
             var key=a.id!=null?'id:'+a.id:'index:'+(a.index!=null?a.index:position);
-            return {key:key,id:a.id,index:a.index!=null?Number(a.index):position,position:position,
+            var streamIndex=/^\d+$/.test(String(a.index))?Number(a.index):null;
+            if(!(streamIndex>0 && streamIndex<=9999 && Math.floor(streamIndex)===streamIndex))streamIndex=null;
+            return {key:key,id:a.id,index:a.index!=null?Number(a.index):position,streamIndex:streamIndex,position:position,
                 lang:lang,type:type,author:author,codec:text(a.codec).toUpperCase(),channels:Number(a.channels) || null,
                 label:((type || 'Озвучка')+' '+(author || lang.toUpperCase())).trim()};
         }).sort(function(a,b){return a.index-b.index;}).map(function(a,i){a.position=i;return a;});
@@ -2573,14 +2575,24 @@ function createRMediaHubDirect(options) {
             }
             function linksReady(error,links) {
                 if(error)return done(error);
+                var requested=/^(hls4|hls2|hls|http)$/.test(body.stream || '')?body.stream:'auto';
+                var formats=requested==='auto'?(body.platform==='tizen'?['hls','hls2']:['hls4']):[requested];
+                if(requested==='auto' && (!audio || voices.length<=1) && body.platform!=='tizen')formats=formats.concat(['hls','hls2','http']);
                 var qualities=(links.files || []).map(function(f) {
                     var urls=f.urls || f.url || {};
-                    var url=audio && voices.length>1?urls.hls4:urls[body.stream || 'hls4'] || urls.hls4 || urls.hls || urls.http;
+                    var url='',stream='',locked=false;
+                    formats.some(function(type){
+                        var candidate=https(urls[type]);
+                        if(!candidate)return false;
+                        var fixed=(type==='hls' || type==='hls2') && audio?rmediahubKinoPubAudioUrl(candidate,audio.streamIndex):'';
+                        if((type==='hls' || type==='hls2') && audio && voices.length>1 && !fixed)return false;
+                        url=fixed || candidate;stream=type;locked=!!fixed;return true;
+                    });
                     return {label:String(f.quality || f.h || 'Auto')+' · '+String(f.codec || 'video'),
-                        height:Number(f.h) || parseInt(f.quality,10) || 0,codec:String(f.codec || ''),url:https(url)};
+                        height:Number(f.h) || parseInt(f.quality,10) || 0,codec:String(f.codec || ''),url:url,stream:stream,audioLocked:locked};
                 }).filter(function(f){return !!f.url;});
                 qualities.sort(function(a,b){return b.height-a.height || (a.codec==='h264'?0:1)-(b.codec==='h264'?0:1);});
-                if(!qualities.length)return done(audio && voices.length>1?'multiaudio_unavailable':'no_https_streams');
+                if(!qualities.length)return done(audio && voices.length>1?(formats[0]==='hls4'?'multiaudio_unavailable':'selected_stream_unavailable'):'no_https_streams');
                 done(null,{title:(item.title || '')+' · '+selected.title,qualities:qualities,
                     audio:audio,audios:voices,videoKey:selected.key,itemId:body.itemId,
                     subtitles:(links.subtitles || []).filter(function(v){return !!https(v.url);}).map(function(v){return {url:v.url,label:v.lang || 'Subtitles'};})});
@@ -2597,14 +2609,16 @@ function createRMediaHubDirect(options) {
     function audioDiagnostics(s,body,done) {
         var itemId=String(body.itemId || ''),videoKey=String(body.videoKey || 'v0');
         if(!/^\d+$/.test(itemId) || !/^(v\d+|s\d+e\d+)$/.test(videoKey))return done('bad_play_request');
-        var result={plugin:'0.3.2',api:HOST,itemId:itemId,videoKey:videoKey,counts:{compact:null,full:null}};
+        var result={plugin:'0.3.3',api:HOST,itemId:itemId,videoKey:videoKey,counts:{compact:null,full:null}};
         function summarize(data,full) {
             var item=data.item || {}, all=videos(item), selected=all.filter(function(v){return v.key===videoKey;})[0];
             var video=selected?selected.video:{};
             return {mode:full?'full':'compact',requestedId:itemId,apiItemId:item.id || null,title:text(item.title),
                 year:item.year || null,type:item.type || null,declaredAudios:Number(item.langs) || null,
                 videoCount:all.length,videoFound:!!selected,audioCount:audios(video).length,audios:audios(video),
-                files:(video.files || []).map(function(f){var urls=f.urls || f.url || {};return {quality:f.quality || f.h || null,codec:text(f.codec),hls4:!!urls.hls4};})};
+                files:(video.files || []).map(function(f){var urls=f.urls || f.url || {};return {quality:f.quality || f.h || null,codec:text(f.codec),
+                    hls4:!!https(urls.hls4),hls:!!https(urls.hls),hls2:!!https(urls.hls2),http:!!https(urls.http),
+                    perVoiceHls:!!rmediahubKinoPubAudioUrl(urls.hls,1)};})};
         }
         api(s,'GET','items/'+itemId,{nolinks:1},function(err,data){
             result.compact=err?{error:err}:summarize(data,false);
@@ -2701,6 +2715,16 @@ function createRMediaHubDirect(options) {
     };
 }
 
+// KinoPub's legacy HLS endpoint exposes one audio per a{API index}.m3u8 playlist.
+// Change only that known terminal filename; preserve the signed query verbatim.
+function rmediahubKinoPubAudioUrl(url,index) {
+    if(typeof url!=='string' || !/^https:\/\//i.test(url) || /^https:\/\/[^/?#]*@/i.test(url))return '';
+    if(!(typeof index==='number' && index>0 && index<=9999 && Math.floor(index)===index))return '';
+    var parts=url.match(/^([^?#]*)([?#].*)?$/);
+    if(!parts || !/\/a[1-9]\d*\.m3u8$/i.test(parts[1]))return '';
+    return parts[1].replace(/\/a[1-9]\d*\.m3u8$/i,'/a'+index+'.m3u8')+(parts[2] || '');
+}
+
 function parseRMediaHubKinoPubLink(value) {
     var match=String(value || '').trim().match(/^https:\/\/(?:kino\.watch|kino\.pub)\/item\/(?:view\/)?(\d+)(?:\/s(\d+)e(\d+))?(?:[?#][^\s]*)?\/?$/i);
     return match?{itemId:match[1],season:match[2]!=null?Number(match[2]):null,episode:match[3]!=null?Number(match[3]):null}:null;
@@ -2738,7 +2762,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
     window.rmediahub_kinopub_direct_loaded = true;
     var L = window.Lampa, $ = window.jQuery;
     var BASE = 'https://api.service-kp.com';
-    var ready = false, authGeneration = 0, authTimer = null;
+    var ready = false, authGeneration = 0, authTimer = null, lastPlayback = null;
     var icon = '<svg viewBox="0 0 44 44" width="44" height="44" fill="none"><rect x="3" y="7" width="38" height="29" rx="7" stroke="currentColor" stroke-width="3"/><path d="M18 14l13 8-13 8z" fill="currentColor"/></svg>';
     var messages = {
         session_busy: 'Другая вкладка RMediaHub обновляет сессию. Повторите позже.',
@@ -2755,6 +2779,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         voice_missing: 'Эта дорожка больше не доступна. Обновите список озвучек.',
         video_missing: 'Видео пока не доступно в KinoPub.',
         multiaudio_unavailable: 'KinoPub не вернул HLS4 с выбором дорожек для этого видео.',
+        selected_stream_unavailable: 'KinoPub не вернул HLS с точным выбором этой озвучки. Проверьте воспроизведение через меню «Источник».',
         search_title_missing: 'В карточке нет названия для поиска.',
         network: 'Нет прямого соединения с KinoPub. Проверьте сеть и доступность API.'
     };
@@ -2786,6 +2811,19 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         clientId:"xbmc",clientSecret:"cgg3gtifu46urtfp2zp1nqtba0k2ezxh"});
     function request(method,path,body,done){return Direct.request(method,path,body,done);}
     function toast(error) { L.Noty.show(messages[error] || ('RMediaHub: ' + error)); }
+    function platform() {
+        var names=['tizen','webos','android','apple','orsay'], found='browser';
+        if(L.Platform && L.Platform.is)names.some(function(name){if(L.Platform.is(name)){found=name;return true;}return false;});
+        if(found==='browser' && /tizen/i.test(navigator.userAgent || ''))found='tizen';
+        return found;
+    }
+    function playbackDiagnostics() {
+        var player=String(L.Storage.field('player') || '').replace(/[^a-z0-9_-]/gi,'').slice(0,30);
+        var report={plugin:'0.3.3',platform:platform(),player:player,
+            format:L.Storage.field('rmediahub_kinopub_format') || 'auto',lastPlayback:lastPlayback};
+        L.Modal.open({title:'KinoPub · Проверка воспроизведения',html:$('<pre class="rmhd-report"></pre>').text(JSON.stringify(report,null,2)),
+            size:'large',onBack:function(){L.Modal.close();focus();}});
+    }
     function focus() { L.Controller.toggle('content'); }
     function escape(value) { return $('<div>').text(String(value || '')).html(); }
     function choose(title, items, selected) {
@@ -2855,11 +2893,11 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         request('GET','/api/status',null,function (error, data) {
             if (error) return toast(error);
             var report = {
-                plugin:'RMediaHub 0.3.2', api:BASE, connection:'direct', lampa:L.Manifest.app_version,
+                plugin:'RMediaHub 0.3.3', api:BASE, connection:'direct', lampa:L.Manifest.app_version,
                 state:data.state, expiresAt:data.expiresAt ? new Date(data.expiresAt).toISOString() : null,
                 lastRefreshAt:data.lastRefreshAt ? new Date(data.lastRefreshAt).toISOString() : null,
                 rotations:data.rotations, lastError:data.lastError, notifyError:data.notifyError,
-                pending:!!data.pending, direct:true
+                pending:!!data.pending, direct:true,platform:platform(),lastPlayback:lastPlayback
             };
             L.Modal.open({title:'RMediaHub · Диагностика',html:$('<pre class="rmhd-report"></pre>').text(JSON.stringify(report,null,2)),size:'large',
                 onBack:function () { L.Modal.close(); focus(); }});
@@ -2980,7 +3018,8 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
             tool('Источник','KinoPub',function(){
                 var items=[{title:'KinoPub',selected:true},{title:'Открыть ссылку KinoPub',open:true}];
                 if(detail)items.push({title:'Обновить озвучки',reload:true},{title:'Проверить озвучки',diagnostics:true});
-                choose('Источник',items,function(a){if(a.open)openKinoPubLink();else if(a.reload)loadItem(detail.id,true);else if(a.diagnostics)checkAudios();else activate();});
+                items.push({title:'Проверить воспроизведение',playback:true});
+                choose('Источник',items,function(a){if(a.open)openKinoPubLink();else if(a.reload)loadItem(detail.id,true);else if(a.diagnostics)checkAudios();else if(a.playback)playbackDiagnostics();else activate();});
             });
             if(detail && detail.videos.length>1) {
                 var seasons=[];
@@ -3029,16 +3068,23 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         function playVoice(audio) {
             if(busy)return;
             var selectedVideo=video, selectedItem=detail.id;
+            var requestedStream=L.Storage.field('rmediahub_kinopub_format') || 'auto';
             loading(true);
+            lastPlayback={state:'requesting',itemId:selectedItem,videoKey:selectedVideo.key,platform:platform(),
+                requestedStream:requestedStream,voice:audio.label,startedAt:new Date().toISOString()};
             call('POST','/api/play',{itemId:selectedItem,videoKey:selectedVideo.key,audioKey:audio.key,
-                fullAudio:detail.audioMode==='full',
-                stream:L.Storage.field('rmediahub_kinopub_stream') || 'hls4'},function(err,media){
-                loading(false);if(err)return toast(err);
+                fullAudio:detail.audioMode==='full',platform:platform(),stream:requestedStream},function(err,media){
+                loading(false);if(err){lastPlayback.state='request_error';lastPlayback.error=err;return toast(err);}
+                lastPlayback.available=media.qualities.map(function(f){return {height:f.height,codec:f.codec,stream:f.stream,audioLocked:f.audioLocked};});
+                lastPlayback.state='choosing_quality';
                 function launch(file) {
+                    lastPlayback.state='starting';lastPlayback.stream=file.stream;lastPlayback.height=file.height;
+                    lastPlayback.codec=file.codec;lastPlayback.audioLocked=file.audioLocked;lastPlayback.audioIndex=media.audio?media.audio.streamIndex:null;
+                    var playerAudios=file.audioLocked && media.audio?[media.audio]:media.audios;
                     var play={url:file.url,title:title+' · '+audio.label,
                         subtitles:media.subtitles,card:card,timeline:timeline(selectedVideo),
-                        translate:{tracks:media.audios.map(function(a){return {name:a.label,language:a.lang,extra:{channels:a.channels,fourCC:a.codec}};})},
-                        rmhdAudio:media.audio,rmhdAudioCount:media.audios.length};
+                        translate:{tracks:playerAudios.map(function(a){return {name:a.label,language:a.lang,extra:{channels:a.channels,fourCC:a.codec}};})},
+                        rmhdAudio:file.audioLocked?null:media.audio,rmhdAudioCount:playerAudios.length,rmhdPlayback:lastPlayback};
                     // Array entries keep Player's global default from replacing the quality just chosen here.
                     if(media.qualities.length>1)play.quality=media.qualities.map(function(f){return {
                         title:escape(f.label),quality:f.label,url:f.url,selected:f.url===file.url,change_quality:true};});
@@ -3150,6 +3196,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                 restore(function(err,data){ if(!alive) return; state.text(err ? (messages[err] || err) : stateLabel(data)); if(err) toast(err); });
             });
             button('Диагностика','Состояние сессии без токенов',diagnostics);
+            button('Проверить воспроизведение','Платформа, формат и последний запуск без секретных ссылок',playbackDiagnostics);
             button('Удалить сессию RMediaHub','Удаляет только собственную сессию RMediaHub на этом устройстве',forget);
             scroll.append(content);
             requests.push(restore(function(err,data) { if(alive) state.text(err ? (messages[err] || err) : stateLabel(data)); }));
@@ -3203,12 +3250,22 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         ).appendTo('head');
         L.Component.add('rmediahub_kinopub_source',Source);
         L.Component.add('rmediahub_kinopub_watch',Watch);
-        var pendingAudio=null;
+        var pendingAudio=null,activePlayback=null;
         if(L.PlayerVideo && L.PlayerVideo.listener) {
             L.Player.listener.follow('start',function(data){
                 pendingAudio=data.rmhdAudio?{audio:data.rmhdAudio,count:data.rmhdAudioCount,applied:false}:null;
+                activePlayback=data.rmhdPlayback || null;
             });
-            L.Player.listener.follow('destroy',function(){pendingAudio=null;});
+            L.Player.listener.follow('destroy',function(){pendingAudio=null;activePlayback=null;});
+            L.PlayerVideo.listener.follow('timeupdate',function(e){
+                if(activePlayback && Number(e.current)>0){activePlayback.state='playing';activePlayback.current=Math.floor(Number(e.current));}
+            });
+            L.PlayerVideo.listener.follow('error',function(e){
+                if(!activePlayback)return;
+                var raw=String(e.error && (e.error.message || e.error.code) || e.error || '');
+                var code=raw.match(/PLAYER_ERROR_[A-Z_]+|MEDIA_ERR_[A-Z_]+|manifestLoadError|manifestParsingError|fragLoadError|bufferAppendError/i);
+                activePlayback.state='player_error';activePlayback.error=code?code[0]:'player_error';
+            });
             L.PlayerVideo.listener.follow('tracks',function(e){
                 if(!pendingAudio || pendingAudio.applied)return;
                 var index=selectRMediaHubAudioTrack(pendingAudio.audio,e.tracks,pendingAudio.count);
@@ -3219,14 +3276,15 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                 pendingAudio.applied=true;
             });
         }
-        window.Lampa.Manifest.plugins={type:'video',version:'0.3.2',name:'RMediaHub KinoPub',description:'Прямой KinoPub без BWA',
+        window.Lampa.Manifest.plugins={type:'video',version:'0.3.3',name:'RMediaHub KinoPub',description:'Прямой KinoPub без BWA',
             component:'rmediahub_kinopub_source',onContextMenu:function(){return {name:'Смотреть в RMediaHub · KinoPub',description:''};},
             onContextLauch:openSource};
         L.SettingsApi.addComponent({component:'rmediahub_kinopub',name:'RMediaHub · KinoPub',icon:icon});
         L.SettingsApi.addParam({component:'rmediahub_kinopub',param:{name:'rmediahub_kinopub_open',type:'button'},
             field:{name:'Открыть RMediaHub',description:'KinoPub · привязка, поиск и диагностика'},onChange:function(){openSource();}});
-        L.SettingsApi.addParam({component:'rmediahub_kinopub',param:{name:'rmediahub_kinopub_stream',type:'select',
-            values:{hls4:'HLS4',hls:'HLS',hls2:'HLS2',http:'MP4 HTTPS'},default:'hls4'},field:{name:'Тип потока KinoPub'}});
+        L.SettingsApi.addParam({component:'rmediahub_kinopub',param:{name:'rmediahub_kinopub_format',type:'select',
+            values:{auto:'Автоматически',hls4:'HLS4 · все дорожки',hls:'HLS · выбранная озвучка',hls2:'HLS2 · выбранная озвучка',http:'MP4 HTTPS'},default:'auto'},
+            field:{name:'Тип потока KinoPub',description:'Авто: Samsung — HLS с выбранной озвучкой; остальные устройства — HLS4.'}});
         var menu=$('<li class="menu__item selector"><div class="menu__ico">'+icon+'</div><div class="menu__text">RMediaHub · KinoPub</div></li>');
         menu.on('hover:enter',function(){openSource();});
         $('.menu .menu__list').eq(0).append(menu);
