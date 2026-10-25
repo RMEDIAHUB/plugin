@@ -1,5 +1,5 @@
 /*!
- * RMediaHub KinoPub Direct v0.3.3 — MIT, Copyright (c) 2026 RMEDIAHUB.
+ * RMediaHub KinoPub Direct v0.3.4 — MIT, Copyright (c) 2026 RMEDIAHUB.
  * Install: one static JavaScript URL. No RMediaHub server, BWA or third-party proxy.
  * KinoPub OAuth uses the publicly distributed xbmc application client from
  * https://github.com/quarckster/kodi.kino.pub/blob/master/src/resources/lib/auth.py
@@ -2428,7 +2428,7 @@ function createRMediaHubDirect(options) {
         } else request();
     }
     function notify(s,done) {
-        api(s,'POST','device/notify',{title:'RMediaHub · Lampa',hardware:'Lampa',software:'RMediaHub Direct/0.3.3'},function(err) {
+        api(s,'POST','device/notify',{title:'RMediaHub · Lampa',hardware:'Lampa',software:'RMediaHub Direct/0.3.4'},function(err) {
             s.notifyError=err || null;save(s);done(null,snapshot(s));
         });
     }
@@ -2580,16 +2580,20 @@ function createRMediaHubDirect(options) {
                 if(requested==='auto' && (!audio || voices.length<=1) && body.platform!=='tizen')formats=formats.concat(['hls','hls2','http']);
                 var qualities=(links.files || []).map(function(f) {
                     var urls=f.urls || f.url || {};
-                    var url='',stream='',locked=false;
+                    var url='',stream='',locked=false,pending=false;
                     formats.some(function(type){
                         var candidate=https(urls[type]);
                         if(!candidate)return false;
                         var fixed=(type==='hls' || type==='hls2') && audio?rmediahubKinoPubAudioUrl(candidate,audio.streamIndex):'';
-                        if((type==='hls' || type==='hls2') && audio && voices.length>1 && !fixed)return false;
-                        url=fixed || candidate;stream=type;locked=!!fixed;return true;
+                        if((type==='hls' || type==='hls2') && audio && voices.length>1 && !fixed && !audio.streamIndex)return false;
+                        url=fixed || candidate;stream=type;locked=!!fixed;
+                        pending=!!((type==='hls' || type==='hls2') && audio && voices.length>1 && !fixed);return true;
                     });
+                    var fallback=requested==='auto' && body.platform==='tizen'?https(urls.http):'';
+                    if(!url && fallback){url=fallback;stream='http';}
                     return {label:String(f.quality || f.h || 'Auto')+' · '+String(f.codec || 'video'),
-                        height:Number(f.h) || parseInt(f.quality,10) || 0,codec:String(f.codec || ''),url:url,stream:stream,audioLocked:locked};
+                        height:Number(f.h) || parseInt(f.quality,10) || 0,codec:String(f.codec || ''),url:url,stream:stream,
+                        audioLocked:locked,audioPending:pending,fallbackUrl:fallback,urlShape:rmediahubStreamShape(url)};
                 }).filter(function(f){return !!f.url;});
                 qualities.sort(function(a,b){return b.height-a.height || (a.codec==='h264'?0:1)-(b.codec==='h264'?0:1);});
                 if(!qualities.length)return done(audio && voices.length>1?(formats[0]==='hls4'?'multiaudio_unavailable':'selected_stream_unavailable'):'no_https_streams');
@@ -2609,7 +2613,7 @@ function createRMediaHubDirect(options) {
     function audioDiagnostics(s,body,done) {
         var itemId=String(body.itemId || ''),videoKey=String(body.videoKey || 'v0');
         if(!/^\d+$/.test(itemId) || !/^(v\d+|s\d+e\d+)$/.test(videoKey))return done('bad_play_request');
-        var result={plugin:'0.3.3',api:HOST,itemId:itemId,videoKey:videoKey,counts:{compact:null,full:null}};
+        var result={plugin:'0.3.4',api:HOST,itemId:itemId,videoKey:videoKey,counts:{compact:null,full:null}};
         function summarize(data,full) {
             var item=data.item || {}, all=videos(item), selected=all.filter(function(v){return v.key===videoKey;})[0];
             var video=selected?selected.video:{};
@@ -2721,8 +2725,97 @@ function rmediahubKinoPubAudioUrl(url,index) {
     if(typeof url!=='string' || !/^https:\/\//i.test(url) || /^https:\/\/[^/?#]*@/i.test(url))return '';
     if(!(typeof index==='number' && index>0 && index<=9999 && Math.floor(index)===index))return '';
     var parts=url.match(/^([^?#]*)([?#].*)?$/);
-    if(!parts || !/\/a[1-9]\d*\.m3u8$/i.test(parts[1]))return '';
-    return parts[1].replace(/\/a[1-9]\d*\.m3u8$/i,'/a'+index+'.m3u8')+(parts[2] || '');
+    if(!parts)return '';
+    if(/\/a[1-9]\d*\.m3u8$/i.test(parts[1]))return parts[1].replace(/\/a[1-9]\d*\.m3u8$/i,'/a'+index+'.m3u8')+(parts[2] || '');
+    if(/\/index(?:-f[1-9]\d*)?-v[1-9]\d*-a[1-9]\d*\.m3u8$/i.test(parts[1]))
+        return parts[1].replace(/-a[1-9]\d*\.m3u8$/i,'-a'+index+'.m3u8')+(parts[2] || '');
+    return '';
+}
+
+// Only structural information is allowed into reports, never host/path/query values.
+function rmediahubStreamShape(url) {
+    var path=String(url || '').split(/[?#]/)[0];
+    return {https:/^https:\/\//i.test(path),extension:/\.m3u8$/i.test(path)?'m3u8':/\.mp4$/i.test(path)?'mp4':'other',
+        perVoice:!!rmediahubKinoPubAudioUrl(url,1),query:String(url || '').indexOf('?')>=0};
+}
+
+// Fetch only playlists. A verified per-audio media playlist is required for locked audio.
+// Separate audio/video HLS4 renditions cannot be composed for AVPlay without a server.
+function resolveRMediaHubHls(file,audio,fetchPlaylist,done,timing) {
+    timing=timing || {};
+    var later=timing.setTimeout || setTimeout,cancel=timing.clearTimeout || clearTimeout;
+    var finished=false,request=null,seen={},count=0;
+    var report={source:rmediahubStreamShape(file.url),requests:0};
+    var timer=later(function(){fallback('playlist_timeout');},timing.timeoutMs || 15000);
+    function safe(value) {return typeof value==='string' && /^https:\/\//i.test(value) && !/^https:\/\/[^/?#]*@/i.test(value);}
+    function copy() {var out={};Object.keys(file).forEach(function(k){out[k]=file[k];});return out;}
+    function end(error,result) {if(finished)return;finished=true;cancel(timer);done(error,result,report);}
+    function fallback(reason) {
+        if(finished)return;
+        report.reason=reason;
+        if(safe(file.fallbackUrl)){
+            var out=copy();out.url=file.fallbackUrl;out.stream='http';out.audioPending=false;out.audioLocked=false;
+            report.resolution='mp4_fallback';end(null,out);
+        } else end(reason);
+        if(request && request.abort)request.abort();
+    }
+    function success(url) {
+        var out=copy();out.url=url;out.audioPending=false;out.audioLocked=true;
+        report.resolution='verified_hls';report.result=rmediahubStreamShape(url);end(null,out);
+    }
+    function absolute(uri,base) {try{var url=new URL(uri,base).href;return safe(url)?url:'';}catch(e){return '';}}
+    function visit(url,verify) {
+        if(finished)return;
+        if(!safe(url))return fallback('playlist_unsafe_url');
+        if(count>=4 || seen[url])return fallback('playlist_loop');
+        seen[url]=true;count++;report.requests=count;
+        request=fetchPlaylist(url,function(error,data){
+            if(finished)return;
+            if(error)return fallback(error==='playlist_timeout'?error:'playlist_unreachable');
+            var text=data && data.text,base=data && data.url || url;
+            if(!safe(base))return fallback('playlist_unsafe_url');
+            report.redirected=base!==url;report.response=rmediahubStreamShape(base);
+            if(typeof text!=='string' || text.length>1048576 || !/^\s*#EXTM3U(?:\s|$)/.test(text))return fallback('playlist_invalid');
+            var lines=text.split(/\r?\n/),variants=[],next=null;
+            var externalAudio=/#EXT-X-MEDIA:(?=[^\r\n]*\bTYPE=AUDIO\b)(?=[^\r\n]*\bURI=)/i.test(text);
+            report.master=/#EXT-X-STREAM-INF:/i.test(text);report.media=/#EXTINF:/i.test(text);
+            report.externalAudio=externalAudio;report.fmp4=/#EXT-X-MAP:/i.test(text);
+            lines.forEach(function(line){
+                line=line.trim();
+                if(/^#EXT-X-STREAM-INF:/i.test(line)){
+                    var size=line.match(/RESOLUTION=\d+x(\d+)/i);
+                    next={height:size?Number(size[1]):0,external:/\bAUDIO=/.test(line)};
+                } else if(next && line && line[0]!=='#'){
+                    next.url=absolute(line,base);variants.push(next);next=null;
+                }
+            });
+            report.variants=variants.length;
+            var fixed=rmediahubKinoPubAudioUrl(base,audio && audio.streamIndex);
+            if(report.media && !externalAudio && ((verify && base===url) || fixed===base))return success(base);
+            if(fixed && fixed!==base)return visit(fixed,true);
+            var eligible=variants.filter(function(v){return v.url && !v.external;});
+            eligible.sort(function(a,b){
+                var aFit=a.height<=(file.height || Infinity),bFit=b.height<=(file.height || Infinity);
+                return aFit!==bFit?(aFit?-1:1):aFit?b.height-a.height:a.height-b.height;
+            });
+            if(eligible.length){
+                var selected=eligible[0],target=rmediahubKinoPubAudioUrl(selected.url,audio && audio.streamIndex);
+                return visit(target || selected.url,!!target);
+            }
+            fallback(externalAudio?'playlist_separate_audio':'playlist_audio_unresolved');
+        });
+    }
+    if(!file.audioPending){cancel(timer);end(null,file);}
+    else visit(file.url,false);
+    return {abort:function(){if(finished)return;finished=true;cancel(timer);if(request && request.abort)request.abort();}};
+}
+
+function createRMediaHubStartGuard(later,cancel,onTimeout) {
+    var timer=null,last=null;
+    function stop(){if(timer!==null)cancel(timer);timer=null;last=null;}
+    return {start:function(){stop();timer=later(function(){timer=null;onTimeout();},30000);},
+        time:function(value){value=Number(value);if(!isFinite(value))return;
+            if(last!==null && value-last>=0.5 && value-last<=5)stop();else last=value;},stop:stop};
 }
 
 function parseRMediaHubKinoPubLink(value) {
@@ -2779,7 +2872,11 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         voice_missing: 'Эта дорожка больше не доступна. Обновите список озвучек.',
         video_missing: 'Видео пока не доступно в KinoPub.',
         multiaudio_unavailable: 'KinoPub не вернул HLS4 с выбором дорожек для этого видео.',
-        selected_stream_unavailable: 'KinoPub не вернул HLS с точным выбором этой озвучки. Проверьте воспроизведение через меню «Источник».',
+        selected_stream_unavailable: 'Не удалось получить поток этой озвучки. Откройте «Источник → Проверить воспроизведение».',
+        playlist_unreachable: 'Плейлист CDN недоступен. Откройте «Источник → Проверить воспроизведение».',
+        playlist_audio_unresolved: 'Плейлист не позволяет точно выбрать озвучку. Попробуйте MP4 в настройках RMediaHub.',
+        playlist_separate_audio: 'Этот HLS содержит раздельные видео и аудио. Попробуйте MP4 в настройках RMediaHub.',
+        playlist_timeout: 'CDN не ответил вовремя. Повторите запуск или выберите MP4 в настройках RMediaHub.',
         search_title_missing: 'В карточке нет названия для поиска.',
         network: 'Нет прямого соединения с KinoPub. Проверьте сеть и доступность API.'
     };
@@ -2807,6 +2904,18 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         xhr.onabort=function(){end('network');};
         xhr.send(body);
     }
+    function fetchPlaylist(url,done) {
+        var xhr=new XMLHttpRequest(),finished=false;
+        function end(error,data){if(finished)return;finished=true;done(error,data);}
+        xhr.open('GET',url,true);xhr.timeout=6000;xhr.withCredentials=false;
+        xhr.onload=function(){
+            if(xhr.status<200 || xhr.status>=300)return end('playlist_unreachable');
+            end(null,{text:xhr.responseText,url:xhr.responseURL || url});
+        };
+        xhr.onerror=xhr.onabort=function(){end('playlist_unreachable');};
+        xhr.ontimeout=function(){end('playlist_timeout');};
+        xhr.send(null);return {abort:function(){xhr.abort();}};
+    }
     var Direct=createRMediaHubDirect({storage:localStorage,transport:xhrTransport,
         clientId:"xbmc",clientSecret:"cgg3gtifu46urtfp2zp1nqtba0k2ezxh"});
     function request(method,path,body,done){return Direct.request(method,path,body,done);}
@@ -2819,7 +2928,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
     }
     function playbackDiagnostics() {
         var player=String(L.Storage.field('player') || '').replace(/[^a-z0-9_-]/gi,'').slice(0,30);
-        var report={plugin:'0.3.3',platform:platform(),player:player,
+        var report={plugin:'0.3.4',platform:platform(),player:player,
             format:L.Storage.field('rmediahub_kinopub_format') || 'auto',lastPlayback:lastPlayback};
         L.Modal.open({title:'KinoPub · Проверка воспроизведения',html:$('<pre class="rmhd-report"></pre>').text(JSON.stringify(report,null,2)),
             size:'large',onBack:function(){L.Modal.close();focus();}});
@@ -2893,7 +3002,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         request('GET','/api/status',null,function (error, data) {
             if (error) return toast(error);
             var report = {
-                plugin:'RMediaHub 0.3.3', api:BASE, connection:'direct', lampa:L.Manifest.app_version,
+                plugin:'RMediaHub 0.3.4', api:BASE, connection:'direct', lampa:L.Manifest.app_version,
                 state:data.state, expiresAt:data.expiresAt ? new Date(data.expiresAt).toISOString() : null,
                 lastRefreshAt:data.lastRefreshAt ? new Date(data.lastRefreshAt).toISOString() : null,
                 rotations:data.rotations, lastError:data.lastError, notifyError:data.notifyError,
@@ -3075,9 +3184,22 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
             call('POST','/api/play',{itemId:selectedItem,videoKey:selectedVideo.key,audioKey:audio.key,
                 fullAudio:detail.audioMode==='full',platform:platform(),stream:requestedStream},function(err,media){
                 loading(false);if(err){lastPlayback.state='request_error';lastPlayback.error=err;return toast(err);}
-                lastPlayback.available=media.qualities.map(function(f){return {height:f.height,codec:f.codec,stream:f.stream,audioLocked:f.audioLocked};});
+                lastPlayback.available=media.qualities.map(function(f){return {height:f.height,codec:f.codec,stream:f.stream,
+                    audioLocked:f.audioLocked,audioPending:f.audioPending,urlShape:f.urlShape,mp4Available:!!f.fallbackUrl};});
                 lastPlayback.state='choosing_quality';
                 function launch(file) {
+                    if(!file.audioPending)return startPlayer(file);
+                    loading(true);lastPlayback.state='resolving_playlist';
+                    var report=lastPlayback;
+                    var task=resolveRMediaHubHls(file,media.audio,fetchPlaylist,function(error,resolved,details){
+                        if(!alive)return;loading(false);report.playlist=details;
+                        if(!started){report.state='cancelled';return;}
+                        if(error){report.state='playlist_error';report.error=error;return toast(error);}
+                        startPlayer(resolved);
+                    });
+                    requests.push(task);
+                }
+                function startPlayer(file) {
                     lastPlayback.state='starting';lastPlayback.stream=file.stream;lastPlayback.height=file.height;
                     lastPlayback.codec=file.codec;lastPlayback.audioLocked=file.audioLocked;lastPlayback.audioIndex=media.audio?media.audio.streamIndex:null;
                     var playerAudios=file.audioLocked && media.audio?[media.audio]:media.audios;
@@ -3086,7 +3208,8 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                         translate:{tracks:playerAudios.map(function(a){return {name:a.label,language:a.lang,extra:{channels:a.channels,fourCC:a.codec}};})},
                         rmhdAudio:file.audioLocked?null:media.audio,rmhdAudioCount:playerAudios.length,rmhdPlayback:lastPlayback};
                     // Array entries keep Player's global default from replacing the quality just chosen here.
-                    if(media.qualities.length>1)play.quality=media.qualities.map(function(f){return {
+                    // Never expose unresolved per-voice URLs to a later quality switch.
+                    if(media.qualities.length>1 && !media.qualities.some(function(f){return f.audioPending;}))play.quality=media.qualities.map(function(f){return {
                         title:escape(f.label),quality:f.label,url:f.url,selected:f.url===file.url,change_quality:true};});
                     L.Player.play(play);L.Player.playlist([]);
                 }
@@ -3251,17 +3374,26 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         L.Component.add('rmediahub_kinopub_source',Source);
         L.Component.add('rmediahub_kinopub_watch',Watch);
         var pendingAudio=null,activePlayback=null;
+        var startGuard=createRMediaHubStartGuard(setTimeout,clearTimeout,function(){
+            if(!activePlayback)return;
+            activePlayback.state='startup_timeout';activePlayback.error='no_time_progress';
+            L.Player.close();L.Noty.show('Видео не начало воспроизведение за 30 секунд. Откройте «Источник → Проверить воспроизведение».');
+        });
         if(L.PlayerVideo && L.PlayerVideo.listener) {
             L.Player.listener.follow('start',function(data){
+                startGuard.stop();
                 pendingAudio=data.rmhdAudio?{audio:data.rmhdAudio,count:data.rmhdAudioCount,applied:false}:null;
                 activePlayback=data.rmhdPlayback || null;
+                if(activePlayback && activePlayback.platform==='tizen')startGuard.start();
             });
-            L.Player.listener.follow('destroy',function(){pendingAudio=null;activePlayback=null;});
+            L.Player.listener.follow('destroy',function(){startGuard.stop();pendingAudio=null;activePlayback=null;});
             L.PlayerVideo.listener.follow('timeupdate',function(e){
+                if(activePlayback)startGuard.time(e.current);
                 if(activePlayback && Number(e.current)>0){activePlayback.state='playing';activePlayback.current=Math.floor(Number(e.current));}
             });
             L.PlayerVideo.listener.follow('error',function(e){
                 if(!activePlayback)return;
+                startGuard.stop();
                 var raw=String(e.error && (e.error.message || e.error.code) || e.error || '');
                 var code=raw.match(/PLAYER_ERROR_[A-Z_]+|MEDIA_ERR_[A-Z_]+|manifestLoadError|manifestParsingError|fragLoadError|bufferAppendError/i);
                 activePlayback.state='player_error';activePlayback.error=code?code[0]:'player_error';
@@ -3276,7 +3408,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                 pendingAudio.applied=true;
             });
         }
-        window.Lampa.Manifest.plugins={type:'video',version:'0.3.3',name:'RMediaHub KinoPub',description:'Прямой KinoPub без BWA',
+        window.Lampa.Manifest.plugins={type:'video',version:'0.3.4',name:'RMediaHub KinoPub',description:'Прямой KinoPub без BWA',
             component:'rmediahub_kinopub_source',onContextMenu:function(){return {name:'Смотреть в RMediaHub · KinoPub',description:''};},
             onContextLauch:openSource};
         L.SettingsApi.addComponent({component:'rmediahub_kinopub',name:'RMediaHub · KinoPub',icon:icon});
