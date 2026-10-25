@@ -1,5 +1,5 @@
 /*!
- * RMediaHub KinoPub Direct v0.3.1 — MIT, Copyright (c) 2026 RMEDIAHUB.
+ * RMediaHub KinoPub Direct v0.3.2 — MIT, Copyright (c) 2026 RMEDIAHUB.
  * Install: one static JavaScript URL. No RMediaHub server, BWA or third-party proxy.
  * KinoPub OAuth uses the publicly distributed xbmc application client from
  * https://github.com/quarckster/kodi.kino.pub/blob/master/src/resources/lib/auth.py
@@ -2428,7 +2428,7 @@ function createRMediaHubDirect(options) {
         } else request();
     }
     function notify(s,done) {
-        api(s,'POST','device/notify',{title:'RMediaHub · Lampa',hardware:'Lampa',software:'RMediaHub Direct/0.3.1'},function(err) {
+        api(s,'POST','device/notify',{title:'RMediaHub · Lampa',hardware:'Lampa',software:'RMediaHub Direct/0.3.2'},function(err) {
             s.notifyError=err || null;save(s);done(null,snapshot(s));
         });
     }
@@ -2507,7 +2507,9 @@ function createRMediaHubDirect(options) {
         if(!queries.length)return done('search_title_missing');
         var names=[card.title,card.name,card.original_title,card.original_name].reduce(function(a,v){return a.concat(titleParts(v).map(normal));},[]);
         var year=Number(String(card.release_date || card.first_air_date || card.year || '').slice(0,4));
-        var serial=card.media_type==='tv' || card.type==='serial' || !!(card.name && !card.title);
+        var cardType=String(card.type || card.media_type || '').toLowerCase();
+        var serial=card.media_type==='tv' || /^(serial|docuserial|tvshow)$/.test(cardType) || !!(card.name && !card.title);
+        var requested3d=cardType==='3d';
         function finish() {
             found.forEach(function(v) {
                 var sameId=(id(card.imdb_id || card.imdb) && id(card.imdb_id || card.imdb)===id(v.imdb)) ||
@@ -2515,12 +2517,18 @@ function createRMediaHubDirect(options) {
                 var conflict=!sameId && ((id(card.imdb_id || card.imdb) && id(v.imdb) && id(card.imdb_id || card.imdb)!==id(v.imdb)) ||
                     (id(card.kinopoisk_id || card.kinopoisk) && id(v.kinopoisk) && id(card.kinopoisk_id || card.kinopoisk)!==id(v.kinopoisk)));
                 var exact=titleParts(v.title).map(normal).some(function(n){return !!n && names.indexOf(n)>=0;});
-                var rightType=serial?/^(serial|docuserial|tvshow)$/.test(v.type):!/^(serial|docuserial|tvshow)$/.test(v.type);
-                v.score=(sameId?1000:0)+(exact?100:0)+(year && year===v.year?30:0)+(rightType?10:-100)-(conflict?500:0);
-                v.confident=!!sameId || !!(!conflict && exact && year && year===v.year && rightType && !body.query);
+                var type=String(v.type || '').toLowerCase();
+                var rightType=serial?/^(serial|docuserial|tvshow)$/.test(type):requested3d?type==='3d':!!type && type!=='3d' && !/^(serial|docuserial|tvshow)$/.test(type);
+                var typeScore=rightType?((type==='movie' || type==='serial' || requested3d)?40:20):-100;
+                v.autoEligible=rightType;
+                v.score=(sameId?1000:0)+(exact?100:0)+(year && year===v.year?30:0)+typeScore-(conflict?500:0);
+                v.confident=rightType && (!!sameId || !!(!conflict && exact && year && year===v.year && !body.query));
             });
-            found.sort(function(a,b){return b.score-a.score || (parseInt(b.quality,10)||0)-(parseInt(a.quality,10)||0);});
-            var top=found[0], tied=top && found.filter(function(v){return v.score===top.score;});
+            found.sort(function(a,b){
+                if(a.autoEligible!==b.autoEligible)return a.autoEligible?-1:1;
+                return b.score-a.score || (parseInt(b.quality,10)||0)-(parseInt(a.quality,10)||0);
+            });
+            var top=found[0], tied=top && found.filter(function(v){return v.autoEligible===top.autoEligible && v.score===top.score;});
             var sameIdentity=top && tied.every(function(v){return (id(top.imdb) && id(top.imdb)===id(v.imdb)) || (id(top.kinopoisk) && id(top.kinopoisk)===id(v.kinopoisk));});
             done(null,{items:found,bestId:top && top.confident && (tied.length===1 || sameIdentity)?top.id:null,query:queries[0]});
         }
@@ -2589,7 +2597,7 @@ function createRMediaHubDirect(options) {
     function audioDiagnostics(s,body,done) {
         var itemId=String(body.itemId || ''),videoKey=String(body.videoKey || 'v0');
         if(!/^\d+$/.test(itemId) || !/^(v\d+|s\d+e\d+)$/.test(videoKey))return done('bad_play_request');
-        var result={plugin:'0.3.1',api:HOST,itemId:itemId,videoKey:videoKey,counts:{compact:null,full:null}};
+        var result={plugin:'0.3.2',api:HOST,itemId:itemId,videoKey:videoKey,counts:{compact:null,full:null}};
         function summarize(data,full) {
             var item=data.item || {}, all=videos(item), selected=all.filter(function(v){return v.key===videoKey;})[0];
             var video=selected?selected.video:{};
@@ -2847,7 +2855,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         request('GET','/api/status',null,function (error, data) {
             if (error) return toast(error);
             var report = {
-                plugin:'RMediaHub 0.3.1', api:BASE, connection:'direct', lampa:L.Manifest.app_version,
+                plugin:'RMediaHub 0.3.2', api:BASE, connection:'direct', lampa:L.Manifest.app_version,
                 state:data.state, expiresAt:data.expiresAt ? new Date(data.expiresAt).toISOString() : null,
                 lastRefreshAt:data.lastRefreshAt ? new Date(data.lastRefreshAt).toISOString() : null,
                 rotations:data.rotations, lastError:data.lastError, notifyError:data.notifyError,
@@ -2890,6 +2898,10 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         var url=backdrop?(movie.backdrop || ''):(movie.img || movie.poster || '');
         if(!url && path)url=L.TMDB && L.TMDB.image?L.TMDB.image('t/p/'+(backdrop?'w780':'w500')+path):'';
         return typeof url==='string' && /^https?:\/\//i.test(url)?url.replace(/^http:\/\//i,'https://'):'';
+    }
+    function editionLabel(type) {
+        var names={movie:'2D', '3d':'3D',serial:'Сериал',documovie:'Документальный фильм',docuserial:'Документальный сериал',concert:'Концерт',tvshow:'ТВ-шоу'};
+        return names[String(type || '').toLowerCase()] || 'Версия';
     }
     function Watch(object) {
         var self=this, card=object.movie || {}, alive=true, started=false, generation=0, last=false, requests=[];
@@ -2994,7 +3006,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         }
         function renderVoices() {
             rows.empty();last=false;rebuildTools();loading(false);
-            state.text(detail.title.split(' / ')[0]+(video.season!==null?' · Сезон '+video.season+', серия '+video.episode:'')+
+            state.text(detail.title.split(' / ')[0]+' · '+editionLabel(detail.type)+(video.season!==null?' · Сезон '+video.season+', серия '+video.episode:'')+
                 ' · Озвучек: '+(video.audios || []).length);
             var list=currentVoices().filter(function(a){return !language || a.lang===language;});
             list.forEach(function(a){
@@ -3049,14 +3061,14 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                 if(!video)return error('video_missing');
                 if(object.videoIndex!=null)video=data.videos[object.videoIndex] || video;
                 if(object.season || object.episode)video=data.videos.filter(function(v){return (!object.season || v.season===Number(object.season)) && (!object.episode || v.episode===Number(object.episode));})[0] || video;
-                meta.text([data.year || year,qualityLabel(data.quality)].filter(Boolean).join(' · '));
+                meta.text([data.year || year,editionLabel(data.type),qualityLabel(data.quality)].filter(Boolean).join(' · '));
                 renderVoices();
             });
         }
         function renderMatches() {
             loading(false);rows.empty();video=null;rebuildTools();last=false;
             state.text(candidates.length?'Выберите совпадение в KinoPub':'В KinoPub пока нет подходящего фильма. Можно уточнить название.');
-            candidates.forEach(function(item){action(item.title+' · '+(item.year || '')+' · '+qualityLabel(item.quality),function(){loadItem(item.id);});});
+            candidates.forEach(function(item){action(item.title+' · '+(item.year || '')+' · '+editionLabel(item.type)+' · '+qualityLabel(item.quality),function(){loadItem(item.id);});});
             if(!candidates.length)action('Уточнить название',function(){input('Поиск в KinoPub',false,function(q){find(q);});});
             activate();
         }
@@ -3111,7 +3123,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
             call('GET','/api/items?q='+encodeURIComponent(q || '')+'&type='+encodeURIComponent(type || '')+'&page='+page,null,function(err,data) {
                 state.text(err ? (messages[err] || err) : 'RMediaHub · KinoPub');
                 if(err) return toast(err);
-                var items=data.items.map(function(item){return {title:escape(item.title),subtitle:escape((item.year || '')+' · '+item.type),item:item};});
+                var items=data.items.map(function(item){return {title:escape(item.title),subtitle:escape((item.year || '')+' · '+editionLabel(item.type)),item:item};});
                 var total=Number(data.pagination.total || page),current=Number(data.pagination.current || page);
                 if(current>1) items.push({title:'← Предыдущая страница',page:current-1});
                 if(current<total) items.push({title:'Следующая страница →',page:current+1});
@@ -3207,7 +3219,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                 pendingAudio.applied=true;
             });
         }
-        window.Lampa.Manifest.plugins={type:'video',version:'0.3.1',name:'RMediaHub KinoPub',description:'Прямой KinoPub без BWA',
+        window.Lampa.Manifest.plugins={type:'video',version:'0.3.2',name:'RMediaHub KinoPub',description:'Прямой KinoPub без BWA',
             component:'rmediahub_kinopub_source',onContextMenu:function(){return {name:'Смотреть в RMediaHub · KinoPub',description:''};},
             onContextLauch:openSource};
         L.SettingsApi.addComponent({component:'rmediahub_kinopub',name:'RMediaHub · KinoPub',icon:icon});
