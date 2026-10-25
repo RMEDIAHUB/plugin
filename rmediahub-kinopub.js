@@ -1,5 +1,5 @@
 /*!
- * RMediaHub KinoPub Direct v0.2.1 — MIT, Copyright (c) 2026 RMEDIAHUB.
+ * RMediaHub KinoPub Direct v0.3.0 — MIT, Copyright (c) 2026 RMEDIAHUB.
  * Install: one static JavaScript URL. No RMediaHub server, BWA or third-party proxy.
  * KinoPub OAuth uses the publicly distributed xbmc application client from
  * https://github.com/quarckster/kodi.kino.pub/blob/master/src/resources/lib/auth.py
@@ -2428,7 +2428,7 @@ function createRMediaHubDirect(options) {
         } else request();
     }
     function notify(s,done) {
-        api(s,'POST','device/notify',{title:'RMediaHub · Lampa',hardware:'Lampa',software:'RMediaHub Direct/0.2.1'},function(err) {
+        api(s,'POST','device/notify',{title:'RMediaHub · Lampa',hardware:'Lampa',software:'RMediaHub Direct/0.3.0'},function(err) {
             s.notifyError=err || null;save(s);done(null,snapshot(s));
         });
     }
@@ -2478,31 +2478,110 @@ function createRMediaHubDirect(options) {
         var result=[];
         if(Array.isArray(item.seasons)) item.seasons.forEach(function(season,si) {
             (season.episodes || season.videos || []).forEach(function(v,vi) {
-                result.push({key:'s'+si+'e'+vi,title:(season.title || 'Сезон '+(si+1))+' · '+(v.title || 'Серия '+(vi+1)),video:v});
+                result.push({key:'s'+si+'e'+vi,title:(season.title || 'Сезон '+(si+1))+' · '+(v.title || 'Серия '+(vi+1)),
+                    season:Number(season.number) || si+1,episode:Number(v.number) || vi+1,video:v});
             });
         });
         else (item.videos || []).forEach(function(v,i){result.push({key:'v'+i,title:v.title || 'Видео '+(i+1),video:v});});
         return result;
     }
+    function image(value) { return https(typeof value==='string'?value.replace(/^http:\/\//i,'https://'):''); }
+    function text(value) { return typeof value==='string'?value.slice(0,1000):''; }
+    function titleParts(value) { return text(value).split(/\s*\/\s*/).filter(function(v){return !!v;}); }
+    function normal(value) {
+        var v=text(value).toLowerCase().replace(/ё/g,'е');
+        if(v.normalize) v=v.normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+        return v.replace(/[^a-zа-яіїєґ0-9]+/g,' ').trim();
+    }
+    function id(value) { return String(value || '').replace(/^tt/i,'').replace(/^0+/,''); }
+    function catalogItem(v) {
+        return {id:v.id,title:text(v.title),type:v.type,year:Number(v.year) || null,
+            imdb:v.imdb || null,kinopoisk:v.kinopoisk || null,quality:v.quality || null,
+            poster:image(v.posters && (v.posters.medium || v.posters.big || v.posters.small)),plot:text(v.plot)};
+    }
+    function find(s,body,done) {
+        var card=body.movie || {}, queries=[], found=[], seen={};
+        function add(q) {q=text(q).trim().slice(0,150);if(q && queries.indexOf(q)<0)queries.push(q);}
+        if(body.query) add(body.query);
+        else {add(titleParts(card.title || card.name)[0]);add(card.original_title || card.original_name);}
+        if(!queries.length)return done('search_title_missing');
+        var names=[card.title,card.name,card.original_title,card.original_name].reduce(function(a,v){return a.concat(titleParts(v).map(normal));},[]);
+        var year=Number(String(card.release_date || card.first_air_date || card.year || '').slice(0,4));
+        var serial=card.media_type==='tv' || card.type==='serial' || !!(card.name && !card.title);
+        function finish() {
+            found.forEach(function(v) {
+                var sameId=(id(card.imdb_id || card.imdb) && id(card.imdb_id || card.imdb)===id(v.imdb)) ||
+                    (id(card.kinopoisk_id || card.kinopoisk) && id(card.kinopoisk_id || card.kinopoisk)===id(v.kinopoisk));
+                var conflict=!sameId && ((id(card.imdb_id || card.imdb) && id(v.imdb) && id(card.imdb_id || card.imdb)!==id(v.imdb)) ||
+                    (id(card.kinopoisk_id || card.kinopoisk) && id(v.kinopoisk) && id(card.kinopoisk_id || card.kinopoisk)!==id(v.kinopoisk)));
+                var exact=titleParts(v.title).map(normal).some(function(n){return !!n && names.indexOf(n)>=0;});
+                var rightType=serial?/^(serial|docuserial|tvshow)$/.test(v.type):!/^(serial|docuserial|tvshow)$/.test(v.type);
+                v.score=(sameId?1000:0)+(exact?100:0)+(year && year===v.year?30:0)+(rightType?10:-100)-(conflict?500:0);
+                v.confident=!!sameId || !!(!conflict && exact && year && year===v.year && rightType && !body.query);
+            });
+            found.sort(function(a,b){return b.score-a.score || (parseInt(b.quality,10)||0)-(parseInt(a.quality,10)||0);});
+            var top=found[0], tied=top && found.filter(function(v){return v.score===top.score;});
+            var sameIdentity=top && tied.every(function(v){return (id(top.imdb) && id(top.imdb)===id(v.imdb)) || (id(top.kinopoisk) && id(top.kinopoisk)===id(v.kinopoisk));});
+            done(null,{items:found,bestId:top && top.confident && (tied.length===1 || sameIdentity)?top.id:null,query:queries[0]});
+        }
+        function next(index) {
+            if(index>=queries.length)return finish();
+            api(s,'GET','items/search',{q:queries[index],field:'title',perpage:50,page:1},function(err,data) {
+                if(err)return done(err);
+                (data.items || []).forEach(function(v){if(/^\d+$/.test(String(v.id)) && !seen[v.id]){seen[v.id]=true;found.push(catalogItem(v));}});
+                next(index+1);
+            });
+        }
+        next(0);
+    }
+    function audios(video) {
+        return (video.audios || []).map(function(a,position) {
+            var lang=text(a.lang).toLowerCase(), type=text(a.type && a.type.title), author=text(a.author && a.author.title);
+            var key=a.id!=null?'id:'+a.id:'index:'+(a.index!=null?a.index:position);
+            return {key:key,id:a.id,index:a.index!=null?Number(a.index):position,position:position,
+                lang:lang,type:type,author:author,codec:text(a.codec).toUpperCase(),channels:Number(a.channels) || null,
+                label:((type || 'Озвучка')+' '+(author || lang.toUpperCase())).trim()};
+        }).sort(function(a,b){return a.index-b.index;}).map(function(a,i){a.position=i;return a;});
+    }
+    function itemDetail(item,itemId) {
+        return {id:itemId,title:text(item.title),type:item.type,year:item.year,quality:item.quality || null,
+            poster:image(item.posters && (item.posters.medium || item.posters.big)),plot:text(item.plot),
+            videos:videos(item).map(function(v){return {key:v.key,title:v.title,season:v.season || null,episode:v.episode || null,
+                duration:Number(v.video.duration)||0,thumbnail:image(v.video.thumbnail),audios:audios(v.video),
+                quality:v.video.quality || item.quality || null};})};
+    }
     function play(s,body,done) {
         if(!/^\d+$/.test(String(body.itemId)) || !/^(v\d+|s\d+e\d+)$/.test(body.videoKey || '')) return done('bad_play_request');
-        api(s,'GET','items/'+body.itemId,{nolinks:0},function(err,data) {
+        api(s,'GET','items/'+body.itemId,{nolinks:1},function(err,data) {
             if(err)return done(err);
             var item=data.item || {}, selected=videos(item).filter(function(v){return v.key===body.videoKey;})[0];
             if(!selected)return done('video_missing');
+            var voices=audios(selected.video), audio=null;
+            if(body.audioKey) {
+                audio=voices.filter(function(v){return v.key===body.audioKey;})[0];
+                if(!audio)return done('voice_missing');
+            }
             function linksReady(error,links) {
                 if(error)return done(error);
                 var qualities=(links.files || []).map(function(f) {
                     var urls=f.urls || f.url || {};
+                    var url=audio && voices.length>1?urls.hls4:urls[body.stream || 'hls4'] || urls.hls4 || urls.hls || urls.http;
                     return {label:String(f.quality || f.h || 'Auto')+' · '+String(f.codec || 'video'),
-                        url:https(urls[body.stream || 'hls4'] || urls.hls4 || urls.hls || urls.http)};
+                        height:Number(f.h) || parseInt(f.quality,10) || 0,codec:String(f.codec || ''),url:https(url)};
                 }).filter(function(f){return !!f.url;});
-                if(!qualities.length)return done('no_https_streams');
+                qualities.sort(function(a,b){return b.height-a.height || (a.codec==='h264'?0:1)-(b.codec==='h264'?0:1);});
+                if(!qualities.length)return done(audio && voices.length>1?'multiaudio_unavailable':'no_https_streams');
                 done(null,{title:(item.title || '')+' · '+selected.title,qualities:qualities,
+                    audio:audio,audios:voices,videoKey:selected.key,itemId:body.itemId,
                     subtitles:(links.subtitles || []).filter(function(v){return !!https(v.url);}).map(function(v){return {url:v.url,label:v.lang || 'Subtitles'};})});
             }
             if(selected.video.id)api(s,'GET','items/media-links',{mid:selected.video.id},linksReady);
-            else linksReady(null,selected.video);
+            else if(selected.video.files && selected.video.files.length)linksReady(null,selected.video);
+            else api(s,'GET','items/'+body.itemId,{nolinks:0},function(error,legacy){
+                if(error)return done(error);
+                var v=videos(legacy.item || {}).filter(function(v){return v.key===body.videoKey;})[0];
+                if(!v)return done('video_missing');linksReady(null,v.video);
+            });
         });
     }
     function perform(method,path,body,done) {
@@ -2525,15 +2604,16 @@ function createRMediaHubDirect(options) {
             if(query.q) {params.q=query.q.slice(0,150);params.field='title';} else params.sort='updated-';
             return api(s,'GET',query.q?'items/search':'items',params,function(err,data) {
                 if(err)return done(err);
-                done(null,{items:(data.items || []).map(function(v){return {id:v.id,title:String(v.title || ''),type:v.type,year:v.year};}),
+                done(null,{items:(data.items || []).map(catalogItem),
                     pagination:data.pagination || {current:params.page,total:params.page}});
             });
         }
         var match=clean.match(/^\/api\/items\/(\d+)$/);
         if(match)return api(s,'GET','items/'+match[1],{nolinks:1},function(err,data){
             if(err)return done(err);
-            done(null,{id:match[1],title:(data.item || {}).title,videos:videos(data.item || {}).map(function(v){return {key:v.key,title:v.title};})});
+            done(null,itemDetail(data.item || {},match[1]));
         });
+        if(clean==='/api/watch/find')return find(s,body,done);
         if(clean==='/api/play')return play(s,body,done);
         done('not_found');
     }
@@ -2576,6 +2656,31 @@ function createRMediaHubDirect(options) {
     };
 }
 
+// Match against the actual tracks exposed by Lampa's player, then enable its native setter.
+// KinoPub's media index is not assumed to be an AVPlay or hls.js array index.
+function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
+    if(!audio || !tracks || !tracks.length)return -1;
+    function norm(v){return String(v || '').toLowerCase().replace(/ё/g,'е').replace(/[^a-zа-яіїєґ0-9]+/g,' ');}
+    var best=-1,score=0,tied=false,bestLabels=[],bestAuthor=false;
+    Array.prototype.forEach.call(tracks,function(track,i){
+        var label=norm([track.name,track.label,track.language,track.lang,track.codec,track.audioCodec,track.extra && track.extra.fourCC].join(' '));
+        var s=0,author=norm(audio.author).trim(),type=norm(audio.type).trim(),codec=norm(audio.codec).trim();
+        var authorMatch=!!author && label.indexOf(author)>=0;
+        if(authorMatch)s+=8;
+        if(type && label.indexOf(type)>=0)s+=2;
+        if(codec && label.indexOf(codec)>=0)s+=1;
+        var aliases={rus:['rus','ru','русский'],ukr:['ukr','uk','українська','украинский'],eng:['eng','en','english'],kaz:['kaz','kk'],uzb:['uzb','uz']};
+        var langs=aliases[audio.lang] || [audio.lang];
+        if(langs.some(function(l){return l && (' '+label+' ').indexOf(' '+l+' ')>=0;}))s+=3;
+        if(s>score){score=s;best=i;tied=false;bestLabels=[label];bestAuthor=authorMatch;}else if(s===score){tied=true;bestLabels.push(label);}
+    });
+    if(best>=0 && !tied && score>=3 && (!audio.author || bestAuthor))return best;
+    // HLS may repeat the same voice in several bitrate groups; those entries are equivalent.
+    if(best>=0 && score>=11 && bestLabels.every(function(v){return v===bestLabels[0];}))return best;
+    if(tracks.length===expectedCount && audio.position>=0 && audio.position<tracks.length)return audio.position;
+    return -1;
+}
+
 (function () {
     'use strict';
     if (window.rmediahub_kinopub_direct_loaded) return;
@@ -2597,6 +2702,10 @@ function createRMediaHubDirect(options) {
         no_https_streams: 'KinoPub не вернул подходящих HTTPS потоков.',
         local_storage_unavailable: 'Хранилище Lampa недоступно. Сессию нельзя сохранить.',
         already_linked: 'KinoPub уже подключён. Для проверки выберите «Восстановить сессию».',
+        voice_missing: 'Эта дорожка больше не доступна. Обновите список озвучек.',
+        video_missing: 'Видео пока не доступно в KinoPub.',
+        multiaudio_unavailable: 'KinoPub не вернул HLS4 с выбором дорожек для этого видео.',
+        search_title_missing: 'В карточке нет названия для поиска.',
         network: 'Нет прямого соединения с KinoPub. Проверьте сеть и доступность API.'
     };
     function stateLabel(data) {
@@ -2644,7 +2753,7 @@ function createRMediaHubDirect(options) {
     }
     function stopAuth() { authGeneration++; clearTimeout(authTimer); authTimer = null; }
     function closeAuth() { stopAuth(); L.Modal.close(); focus(); }
-    function link() {
+    function link(onLinked) {
         stopAuth();
         var generation = authGeneration;
         request('POST', '/api/link/start', {}, function (error, data) {
@@ -2685,7 +2794,7 @@ function createRMediaHubDirect(options) {
                         if (err === 'network' || err === 'upstream_unreachable') schedule(10);
                         return;
                     }
-                    if (next.linked) { closeAuth(); $('.rmhd-state').text('KinoPub подключён'); L.Noty.show('KinoPub привязан к RMediaHub'); return; }
+                    if (next.linked) { closeAuth(); $('.rmhd-state').text('KinoPub подключён'); L.Noty.show('KinoPub привязан к RMediaHub'); if(typeof onLinked==='function')onLinked(); return; }
                     schedule(next.retryAfter || (next.pending && next.pending.interval) || p.interval);
                 });
             }
@@ -2696,7 +2805,7 @@ function createRMediaHubDirect(options) {
         request('GET','/api/status',null,function (error, data) {
             if (error) return toast(error);
             var report = {
-                plugin:'RMediaHub 0.2.1', api:BASE, connection:'direct', lampa:L.Manifest.app_version,
+                plugin:'RMediaHub 0.3.0', api:BASE, connection:'direct', lampa:L.Manifest.app_version,
                 state:data.state, expiresAt:data.expiresAt ? new Date(data.expiresAt).toISOString() : null,
                 lastRefreshAt:data.lastRefreshAt ? new Date(data.lastRefreshAt).toISOString() : null,
                 rotations:data.rotations, lastError:data.lastError, notifyError:data.notifyError,
@@ -2726,7 +2835,184 @@ function createRMediaHubDirect(options) {
         });
     }
     function openSource(movie) {
+        if(movie && (movie.title || movie.name))return openWatch(movie);
         L.Activity.push({url:'',title:'RMediaHub · KinoPub',component:'rmediahub_kinopub_source',movie:movie || null,page:1});
+    }
+    function openWatch(movie,itemId) {
+        L.Select.close();
+        L.Activity.push({url:'',title:'RMediaHub · KinoPub',component:'rmediahub_kinopub_watch',
+            movie:movie,itemId:itemId || null,page:1});
+    }
+    function poster(movie,backdrop) {
+        var path=backdrop?movie.backdrop_path:movie.poster_path;
+        var url=backdrop?(movie.backdrop || ''):(movie.img || movie.poster || '');
+        if(!url && path)url=L.TMDB && L.TMDB.image?L.TMDB.image('t/p/'+(backdrop?'w780':'w500')+path):'';
+        return typeof url==='string' && /^https?:\/\//i.test(url)?url.replace(/^http:\/\//i,'https://'):'';
+    }
+    function Watch(object) {
+        var self=this, card=object.movie || {}, alive=true, started=false, generation=0, last=false, requests=[];
+        var detail=null, video=null, candidates=[], language='', quality='', busy=false;
+        var title=card.title || card.name || '', year=String(card.release_date || card.first_air_date || card.year || '').slice(0,4);
+        var files=new L.Files({movie:{id:card.id,title:escape(title),original_title:escape(card.original_title || card.original_name || ''),img:poster(card),source:card.source}});
+        var root=files.render().addClass('rmhd-watch'), scroll=new L.Scroll({mask:true,over:true});
+        var body=$('<div class="rmhd-watch-body"></div>'), bar=$('<div class="rmhd-tools"></div>'), rows=$('<div class="rmhd-rows"></div>');
+        var meta=$('<div class="rmhd-movie-meta"></div>').text(year).appendTo(root.find('.files__info'));
+        $('<div class="rmhd-plot"></div>').text(card.overview || card.plot || '').appendTo(root.find('.files__info'));
+        var state=$('<div class="rmhd-watch-state"></div>');
+        function call(method,path,data,done) {
+            var version=generation;
+            var r=request(method,path,data,function(err,res){if(alive && version===generation)done(err,res);});
+            requests.push(r);return r;
+        }
+        function loading(value) {busy=value;if(self.activity)self.activity.loader(value);}
+        function activate() {if(started && alive)self.start();}
+        function trackFocus(el) {
+            el.on('hover:focus',function(){last=this;scroll.update($(this),true);});return el;
+        }
+        function tool(label,value,action) {
+            var el=$('<div class="simple-button simple-button--filter selector rmhd-tool"><span></span><div></div></div>');
+            el.find('span').text(label);el.find('div').text(value || '').toggleClass('hide',!value);
+            el.on('hover:enter',action);trackFocus(el);bar.append(el);return el;
+        }
+        function error(err) {
+            loading(false);rows.empty();state.text(messages[err] || ('Ошибка KinoPub: '+err));
+            action('Повторить поиск',function(){find();});
+            if(err==='link_required' || err==='refresh_uncertain')action('Привязать KinoPub',function(){link(function(){find();});});
+            else action('Настройки KinoPub',function(){openSource();});
+            activate();
+        }
+        function action(label,fn) {
+            var el=$('<div class="rmhd-action selector"></div>').text(label).on('hover:enter',fn);
+            rows.append(trackFocus(el));return el;
+        }
+        function timeline(v) {
+            var hash=L.Utils.hash('rmediahub:kinopub:'+detail.id+':'+v.key);
+            return L.Timeline.view(hash,L.Timeline.link?L.Timeline.link(card,v.season,v.episode):null);
+        }
+        function qualityLabel(value) {
+            var number=parseInt(value,10);return number>=2160?'4K':number?number+'p':String(value || '');
+        }
+        function currentVoices() {
+            if(!video)return [];
+            return video.audios && video.audios.length?video.audios:[{key:'',label:'Озвучка по умолчанию',lang:'',codec:''}];
+        }
+        function rebuildTools() {
+            bar.empty();
+            tool('Поиск',title,function(){input('Уточнить название в KinoPub',false,function(q){find(q);});});
+            tool('Источник','KinoPub',function(){choose('Источник',[{title:'KinoPub',selected:true}],activate);});
+            if(detail && detail.videos.length>1) {
+                var seasons=[];
+                detail.videos.forEach(function(v){if(v.season!==null && seasons.indexOf(v.season)<0)seasons.push(v.season);});
+                if(seasons.length)tool('Сезон',String(video.season),function(){
+                    choose('Сезон',seasons.map(function(s){return {title:'Сезон '+s,value:s,selected:s===video.season};}),function(a){
+                        video=detail.videos.filter(function(v){return v.season===a.value;})[0];language='';renderVoices();
+                    });
+                });
+                tool(seasons.length?'Серия':'Видео',video.episode?String(video.episode):video.title,function(){
+                    choose(seasons.length?'Серия':'Видео',detail.videos.filter(function(v){return v.season===video.season;}).map(function(v){return {title:escape(v.title),video:v,selected:v.key===video.key};}),function(a){video=a.video;language='';renderVoices();});
+                });
+            }
+            if(video)tool('Фильтр',language?language.toUpperCase():'Все озвучки',function(){
+                var langs=[];currentVoices().forEach(function(a){if(a.lang && langs.indexOf(a.lang)<0)langs.push(a.lang);});
+                choose('Язык озвучки',[{title:'Все озвучки',lang:'',selected:!language}].concat(langs.map(function(l){return {title:l.toUpperCase(),lang:l,selected:language===l};})),function(a){language=a.lang;renderVoices();});
+            });
+            if(video)tool('Качество',quality || 'Спросить',function(){
+                choose('Предпочитаемое качество',[{title:'Спрашивать перед запуском',value:''},{title:'Максимальное',value:'max'},
+                    {title:'1080p',value:'1080'},{title:'720p',value:'720'}],function(a){quality=a.value;rebuildTools();activate();});
+            });
+            tool('Настройки','',function(){openSource();});
+        }
+        function renderVoices() {
+            rows.empty();last=false;rebuildTools();loading(false);
+            state.text(detail.title.split(' / ')[0]+(video.season!==null?' · Сезон '+video.season+', серия '+video.episode:''));
+            var list=currentVoices().filter(function(a){return !language || a.lang===language;});
+            list.forEach(function(a){
+                var row=$('<div class="rmhd-voice selector"><div class="rmhd-voice-image"><img/><span>▶</span></div><div class="rmhd-voice-body"><div class="rmhd-voice-top"><strong></strong><small></small></div><div class="rmhd-progress"><div></div></div><div class="rmhd-voice-bottom"><span></span><b></b></div></div></div>');
+                var thumbnail=video.thumbnail || poster(card,true) || poster(card) || detail.poster;
+                row.find('img').attr('src',thumbnail).on('error',function(){$(this).hide();});
+                row.find('strong').text(a.label);
+                row.find('small').text(video.duration?Math.ceil(video.duration/60)+' мин':'');
+                var formats=['KinoPub'];if(a.lang)formats.push(a.lang.toUpperCase());if(a.codec)formats.push(a.codec);
+                if(a.channels)formats.push(a.channels===6?'5.1':a.channels===2?'2.0':a.channels+' ch');
+                row.find('.rmhd-voice-bottom span').text(formats.join(' · '));
+                row.find('b').text(qualityLabel(video.quality || detail.quality));
+                var view=timeline(video);row.find('.rmhd-progress div').css('width',Math.max(0,Math.min(100,Number(view.percent)||0))+'%');
+                row.on('hover:enter',function(){playVoice(a);});rows.append(trackFocus(row));
+            });
+            if(!list.length)action('Показать все озвучки',function(){language='';renderVoices();});
+            if(candidates.length>1)action('Выбрать другое совпадение KinoPub',renderMatches);
+            activate();
+        }
+        function playVoice(audio) {
+            if(busy)return;
+            var selectedVideo=video, selectedItem=detail.id;
+            loading(true);
+            call('POST','/api/play',{itemId:selectedItem,videoKey:selectedVideo.key,audioKey:audio.key,
+                stream:L.Storage.field('rmediahub_kinopub_stream') || 'hls4'},function(err,media){
+                loading(false);if(err)return toast(err);
+                function launch(file) {
+                    var play={url:file.url,title:title+' · '+audio.label,
+                        subtitles:media.subtitles,card:card,timeline:timeline(selectedVideo),
+                        translate:{tracks:media.audios.map(function(a){return {name:a.label,language:a.lang,extra:{channels:a.channels,fourCC:a.codec}};})},
+                        rmhdAudio:media.audio,rmhdAudioCount:media.audios.length};
+                    // Array entries keep Player's global default from replacing the quality just chosen here.
+                    if(media.qualities.length>1)play.quality=media.qualities.map(function(f){return {
+                        title:escape(f.label),quality:f.label,url:f.url,selected:f.url===file.url,change_quality:true};});
+                    L.Player.play(play);L.Player.playlist([]);
+                }
+                if(quality) {
+                    var ceiling=quality==='max'?Infinity:Number(quality), choices=media.qualities.filter(function(f){return f.height<=ceiling;});
+                    launch(choices[0] || media.qualities[media.qualities.length-1]);
+                }
+                else choose('Качество · '+audio.label,media.qualities.map(function(f){return {title:escape(f.label),file:f};}),function(a){launch(a.file);});
+            });
+        }
+        function loadItem(itemId) {
+            loading(true);state.text('Загружаем озвучки KinoPub…');rows.empty();
+            call('GET','/api/items/'+itemId,null,function(err,data){
+                if(err)return error(err);detail=data;video=data.videos[0];language='';
+                if(!video)return error('video_missing');
+                if(object.season || object.episode)video=data.videos.filter(function(v){return (!object.season || v.season===Number(object.season)) && (!object.episode || v.episode===Number(object.episode));})[0] || video;
+                meta.text([data.year || year,qualityLabel(data.quality)].filter(Boolean).join(' · '));
+                renderVoices();
+            });
+        }
+        function renderMatches() {
+            loading(false);rows.empty();video=null;rebuildTools();last=false;
+            state.text(candidates.length?'Выберите совпадение в KinoPub':'В KinoPub пока нет подходящего фильма. Можно уточнить название.');
+            candidates.forEach(function(item){action(item.title+' · '+(item.year || '')+' · '+qualityLabel(item.quality),function(){loadItem(item.id);});});
+            if(!candidates.length)action('Уточнить название',function(){input('Поиск в KinoPub',false,function(q){find(q);});});
+            activate();
+        }
+        function find(query) {
+            generation++;detail=null;video=null;rows.empty();last=false;rebuildTools();loading(true);
+            state.text('Ищем «'+title+'» в KinoPub…');
+            call('POST','/api/watch/find',{movie:card,query:query || ''},function(err,data){
+                if(err)return error(err);candidates=data.items;
+                if(data.bestId)loadItem(data.bestId);else renderMatches();
+            });
+        }
+        function resize() {scroll.minus(window.innerWidth>580?false:root.find('.files__left'));}
+        this.create=function(){
+            body.append(bar,state,rows);scroll.append(body);files.append(scroll.render());
+            scroll.body().addClass('torrent-list');resize();window.addEventListener('resize',resize,false);
+            if(object.itemId)loadItem(object.itemId);else find();
+            return root;
+        };
+        this.start=function(){
+            if(L.Activity.active() && L.Activity.active().activity!==self.activity)return;
+            started=true;
+            L.Controller.add('content',{
+                toggle:function(){L.Controller.collectionSet(scroll.render(),root);L.Controller.collectionFocus(last || rows.find('.selector').first()[0] || false,scroll.render());},
+                up:function(){if(Navigator.canmove('up'))Navigator.move('up');else L.Controller.toggle('head');},
+                down:function(){Navigator.move('down');},right:function(){Navigator.move('right');},
+                left:function(){if(Navigator.canmove('left'))Navigator.move('left');else L.Controller.toggle('menu');},
+                back:function(){L.Activity.backward();}
+            });L.Controller.toggle('content');
+        };
+        this.stop=function(){started=false;};this.pause=function(){};
+        this.destroy=function(){alive=false;generation++;requests.forEach(function(r){r.abort();});window.removeEventListener('resize',resize);scroll.destroy();files.destroy();};
+        this.render=function(){return root;};
     }
     function Source(object) {
         var self=this, scroll=new L.Scroll({mask:true,over:true}), last=false, alive=true, active=false, requests=[];
@@ -2761,19 +3047,7 @@ function createRMediaHubDirect(options) {
             });
         }
         function detail(item) {
-            call('GET','/api/items/'+item.id,null,function(err,data) {
-                if(err) return toast(err);
-                if(!data.videos.length) return L.Noty.show('Нет доступных видео');
-                choose('RMediaHub · '+item.title,data.videos.map(function(v){return {title:escape(v.title),key:v.key};}),function(v){
-                    call('POST','/api/play',{itemId:item.id,videoKey:v.key,stream:L.Storage.field('rmediahub_kinopub_stream') || 'hls4'},function(error,media) {
-                        if(error) return toast(error);
-                        choose('Качество · '+media.title,media.qualities.map(function(f){return {title:escape(f.label),url:f.url};}),function(f){
-                            L.Player.play({url:f.url,title:media.title,subtitles:media.subtitles,card:object.movie || {id:item.id,title:item.title,source:'rmediahub'}});
-                            L.Player.playlist([]);
-                        });
-                    });
-                });
-            });
+            openWatch({id:item.id,title:item.title,poster:item.poster,plot:item.plot,year:item.year,source:'rmediahub_kinopub',type:item.type},item.id);
         }
         this.create=function() {
             if(object.movie) button('Найти: '+(object.movie.title || object.movie.name || ''),'Выберите совпадение из результатов KinoPub',function(){
@@ -2821,8 +3095,42 @@ function createRMediaHubDirect(options) {
             '.rmhd-uri{word-break:break-all;color:#a5b4fc}.rmhd-code{font-size:3em;letter-spacing:.15em;font-weight:700;margin:.3em 0}' +
             '.rmhd-report{white-space:pre-wrap;word-break:break-word;padding:1em}'
         ).appendTo('head');
+        $('<style></style>').text(
+            '.rmhd-watch{background:#000;min-height:100%}.rmhd-watch .full-start__poster{width:8em;height:12em;padding:0}' +
+            '.rmhd-watch .full-start__poster img{width:100%;height:100%;object-fit:cover;display:block}' +
+            '.rmhd-watch .files__info{padding-top:1em}.rmhd-watch .files__title{font-size:1.7em;font-weight:700;line-height:1.2}' +
+            '.rmhd-movie-meta{margin:1em 0;opacity:.75}.rmhd-plot{line-height:1.5;font-size:.9em;max-height:26em;overflow:hidden}' +
+            '.rmhd-watch-body{padding:.5em 1em 2em}.rmhd-tools{display:flex;flex-wrap:wrap;gap:.5em;margin-bottom:1em}' +
+            '.rmhd-tool{margin:0;font-size:.9em}.rmhd-watch-state{opacity:.65;margin:0 0 1em;font-size:.9em}' +
+            '.rmhd-voice{display:flex;align-items:center;gap:1.2em;padding:.4em;border:3px solid transparent;border-radius:.6em;margin:.3em 0}' +
+            '.rmhd-voice.focus{border-color:var(--color-main,#fff);background:rgba(255,255,255,.06)}' +
+            '.rmhd-voice-image{position:relative;flex:0 0 12em;height:7em;background:#253044;border-radius:.3em;overflow:hidden}' +
+            '.rmhd-voice-image img{width:100%;height:100%;object-fit:cover}.rmhd-voice-image span{position:absolute;top:.5em;left:.5em;background:rgba(0,0,0,.55);border-radius:50%;padding:.3em .5em}' +
+            '.rmhd-voice-body{flex:1;min-width:0}.rmhd-voice-top,.rmhd-voice-bottom{display:flex;justify-content:space-between;gap:1em;align-items:center}' +
+            '.rmhd-voice-top strong{font-size:1.5em;font-weight:400;line-height:1.2}.rmhd-voice-top small{white-space:nowrap;opacity:.8}' +
+            '.rmhd-voice-bottom{margin-top:.6em;font-size:.8em}.rmhd-voice-bottom b{font-weight:400;white-space:nowrap}' +
+            '.rmhd-progress{height:.25em;background:rgba(255,255,255,.28);margin-top:1em;border-radius:1em}.rmhd-progress div{height:100%;background:#fff;border-radius:1em}' +
+            '@media(max-width:580px){.rmhd-voice-image{flex-basis:7em;height:4.7em}.rmhd-voice-top strong{font-size:1.15em}.rmhd-voice-top small{display:none}.rmhd-plot{max-height:7em}.rmhd-watch-body{padding:.5em}}'
+        ).appendTo('head');
         L.Component.add('rmediahub_kinopub_source',Source);
-        window.Lampa.Manifest.plugins={type:'video',version:'0.2.1',name:'RMediaHub KinoPub',description:'Прямой KinoPub без BWA',
+        L.Component.add('rmediahub_kinopub_watch',Watch);
+        var pendingAudio=null;
+        if(L.PlayerVideo && L.PlayerVideo.listener) {
+            L.Player.listener.follow('start',function(data){
+                pendingAudio=data.rmhdAudio?{audio:data.rmhdAudio,count:data.rmhdAudioCount,applied:false}:null;
+            });
+            L.Player.listener.follow('destroy',function(){pendingAudio=null;});
+            L.PlayerVideo.listener.follow('tracks',function(e){
+                if(!pendingAudio || pendingAudio.applied)return;
+                var index=selectRMediaHubAudioTrack(pendingAudio.audio,e.tracks,pendingAudio.count);
+                if(index<0){pendingAudio.applied=true;L.Noty.show('Выбранная озвучка не определена плеером. Выберите дорожку в меню звука.');return;}
+                Array.prototype.forEach.call(e.tracks,function(a,i){a.enabled=i===index;a.selected=i===index;});
+                if(e.tracks[index].onSelect)e.tracks[index].onSelect(e.tracks[index]);
+                if(L.PlayerVideo.setParams){var params=L.PlayerVideo.saveParams?L.PlayerVideo.saveParams():{};params.track=index;L.PlayerVideo.setParams(params);}
+                pendingAudio.applied=true;
+            });
+        }
+        window.Lampa.Manifest.plugins={type:'video',version:'0.3.0',name:'RMediaHub KinoPub',description:'Прямой KinoPub без BWA',
             component:'rmediahub_kinopub_source',onContextMenu:function(){return {name:'Смотреть в RMediaHub · KinoPub',description:''};},
             onContextLauch:openSource};
         L.SettingsApi.addComponent({component:'rmediahub_kinopub',name:'RMediaHub · KinoPub',icon:icon});
