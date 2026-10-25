@@ -1,5 +1,5 @@
 /*!
- * RMediaHub KinoPub Direct v0.2.0 — MIT, Copyright (c) 2026 RMEDIAHUB.
+ * RMediaHub KinoPub Direct v0.2.1 — MIT, Copyright (c) 2026 RMEDIAHUB.
  * Install: one static JavaScript URL. No RMediaHub server, BWA or third-party proxy.
  * KinoPub OAuth uses the publicly distributed xbmc application client from
  * https://github.com/quarckster/kodi.kino.pub/blob/master/src/resources/lib/auth.py
@@ -2428,7 +2428,7 @@ function createRMediaHubDirect(options) {
         } else request();
     }
     function notify(s,done) {
-        api(s,'POST','device/notify',{title:'RMediaHub · Lampa',hardware:'Lampa',software:'RMediaHub Direct/0.2.0'},function(err) {
+        api(s,'POST','device/notify',{title:'RMediaHub · Lampa',hardware:'Lampa',software:'RMediaHub Direct/0.2.1'},function(err) {
             s.notifyError=err || null;save(s);done(null,snapshot(s));
         });
     }
@@ -2696,7 +2696,7 @@ function createRMediaHubDirect(options) {
         request('GET','/api/status',null,function (error, data) {
             if (error) return toast(error);
             var report = {
-                plugin:'RMediaHub 0.2.0', api:BASE, connection:'direct', lampa:L.Manifest.app_version,
+                plugin:'RMediaHub 0.2.1', api:BASE, connection:'direct', lampa:L.Manifest.app_version,
                 state:data.state, expiresAt:data.expiresAt ? new Date(data.expiresAt).toISOString() : null,
                 lastRefreshAt:data.lastRefreshAt ? new Date(data.lastRefreshAt).toISOString() : null,
                 rotations:data.rotations, lastError:data.lastError, notifyError:data.notifyError,
@@ -2822,7 +2822,7 @@ function createRMediaHubDirect(options) {
             '.rmhd-report{white-space:pre-wrap;word-break:break-word;padding:1em}'
         ).appendTo('head');
         L.Component.add('rmediahub_kinopub_source',Source);
-        L.Manifest.plugins={type:'video',version:'0.2.0',name:'RMediaHub KinoPub',description:'Прямой KinoPub без BWA',
+        window.Lampa.Manifest.plugins={type:'video',version:'0.2.1',name:'RMediaHub KinoPub',description:'Прямой KinoPub без BWA',
             component:'rmediahub_kinopub_source',onContextMenu:function(){return {name:'Смотреть в RMediaHub · KinoPub',description:''};},
             onContextLauch:openSource};
         L.SettingsApi.addComponent({component:'rmediahub_kinopub',name:'RMediaHub · KinoPub',icon:icon});
