@@ -3,6 +3,7 @@
 
     if (window.rmedia_lock_test48_ready) return;
     window.rmedia_lock_test48_ready = true;
+    window.rmedia_lock_ui_version = '2026-10-26-tv-pin-1';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -24,6 +25,11 @@
     let suppressNextSyncEnter = false;
     let clientMenuRegistered = false;
     let authorizedSettingsSession = false;
+    let settingsOpenPermit = false;
+    let protectedComponentPermit = '';
+    let settingsCaptureBound = false;
+    let pinDialogOpen = false;
+    const KINOPUB_SETTINGS_PIN = '2580';
 
     function storageGet(name, fallback) {
         try {
@@ -185,103 +191,90 @@
     }
 
     function askSpecificPin(expected, title, onSuccess, wrongMode, onDone) {
-        // Remember where PIN was invoked from.
-        // Lampa.Input.edit ALWAYS returns to settings_component on close,
-        // which freezes Android if PIN was called from Head/Content.
+        // Native TV Enter does not bubble. Keep one PIN dialog for all entry
+        // paths, including a click followed by Lampa's synthetic Enter.
+        if (pinDialogOpen) {
+            if (typeof onDone === 'function') onDone();
+            return;
+        }
+        pinDialogOpen = true;
         let originController = null;
-
         try {
             const enabled = Lampa.Controller && Lampa.Controller.enabled
-                ? Lampa.Controller.enabled()
-                : null;
-
-            originController = enabled && enabled.name ? enabled.name : null;
+                ? Lampa.Controller.enabled() : null;
+            originController = enabled && enabled.name || null;
         } catch (e) {}
 
         let finished = false;
+        let submitted = false;
+        let cancelled = false;
         function finishOnce() {
             if (finished) return;
             finished = true;
-            try {
-                if (typeof onDone === 'function') onDone();
-            } catch (e) {}
+            pinDialogOpen = false;
+            try { if (typeof onDone === 'function') onDone(); } catch (e) {}
         }
-
         function restoreOrigin(callback) {
             try {
-                if (
-                    originController &&
-                    Lampa.Controller &&
-                    typeof Lampa.Controller.toggle === 'function'
-                ) {
+                if (originController && Lampa.Controller && Lampa.Controller.toggle) {
+                    // A PIN keyboard temporarily hides the Settings layer.
+                    // Returning to the already authorised list is not a new
+                    // gear activation and must not ask for the menu PIN again.
+                    if (originController === 'settings' && authorizedSettingsSession) {
+                        settingsOpenPermit = true;
+                    }
                     Lampa.Controller.toggle(originController);
                 }
             } catch (e) {}
-
-            // Android needs one tick after controller restoration.
             setTimeout(callback, 80);
         }
-
+        function notifyWrong() {
+            try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Неверный PIN'); } catch (e) {}
+        }
         if (window.Lampa && Lampa.Input && typeof Lampa.Input.edit === 'function') {
-            Lampa.Input.edit({
-                title: title || 'RMEDIA PIN',
-                value: '',
-                free: true,
-                nosave: true,
-                nomic: true,
-                password: true
-            }, function (value) {
-                const ok = String(value || '').trim() === String(expected);
-
-                if (ok) {
+            try {
+                const keyboard = Lampa.Input.edit({
+                    title: title || 'RMEDIA PIN', value: '', free: true,
+                    nosave: true, nomic: true, password: true
+                }, function (value) {
+                    if (submitted) return;
+                    submitted = true;
                     restoreOrigin(function () {
-                        onSuccess();
-                    });
-                } else {
-                    restoreOrigin(function () {
+                        const ok = !cancelled && String(value || '').trim() === String(expected);
                         finishOnce();
-                        if (wrongMode === 'menu') {
-                            try {
-                                if (Lampa.Noty && Lampa.Noty.show) {
-                                    Lampa.Noty.show('Неверный PIN');
-                                }
-                            } catch (e) {}
-                        } else {
-                            /*
-                             * For ADMIN PIN do not call denyPinAndExit after
-                             * restoring Head/Content: that would force Content
-                             * and can itself break Android navigation.
-                             * Just keep client mode and notify.
-                             */
-                            unlocked = false;
-                            hideRestrictedUI();
-
-                            try {
-                                if (Lampa.Noty && Lampa.Noty.show) {
-                                    Lampa.Noty.show('Неверный PIN');
-                                }
-                            } catch (e) {}
+                        if (ok) onSuccess();
+                        else {
+                            if (wrongMode !== 'menu') {
+                                unlocked = false;
+                                hideRestrictedUI();
+                            }
+                            if (!cancelled) notifyWrong();
+                        }
+                    });
+                });
+                // Lampa.Input calls the same callback on Enter and Back.
+                // Its keyboard event is sent synchronously; the delayed
+                // result above can therefore reject Back even with a valid PIN.
+                if (keyboard && keyboard.listener && keyboard.listener.follow) {
+                    keyboard.listener.follow('back', function () {
+                        cancelled = true;
+                        if (!submitted) {
+                            submitted = true;
+                            restoreOrigin(finishOnce);
                         }
                     });
                 }
-            });
-
+            } catch (e) {
+                finishOnce();
+                try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Не удалось открыть ввод PIN'); } catch (e2) {}
+            }
             return;
         }
-
         const entered = window.prompt(title || 'RMEDIA PIN');
-        if (entered === null) {
-            finishOnce();
-            return;
-        }
-
+        finishOnce();
+        if (entered === null) return;
         if (String(entered).trim() === String(expected)) onSuccess();
-        else {
-            finishOnce();
-            try {
-                if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Неверный PIN');
-            } catch (e) {}
-        }
+        else notifyWrong();
     }
 
     function askPin(onSuccess) {
@@ -340,6 +333,7 @@
         const observer = new MutationObserver(function () {
             attach();
             hideRestrictedUI();
+            hideKinoPubMenu();
             bindExtensionsGate();
         });
 
@@ -349,37 +343,167 @@
         });
     }
 
-    function bindSafePlayerButton() {
-        // Keep the native gear and native settings screen. Require the menu PIN
-        // before temporarily showing the full list of settings sections.
-        $(document)
-            .off('click.rmedia-player hover:enter.rmedia-player', '.open--settings')
-            .on('click.rmedia-player hover:enter.rmedia-player', '.open--settings', function (e) {
-                if (!isEnabled() || unlocked || authorizedSettingsSession) return;
-
-                if (e) {
-                    e.preventDefault();
-                    e.stopImmediatePropagation();
-                }
-
-                askMenuPin(openAuthorizedSettings);
-
-                return false;
-            });
+    function settingsSessionAllowed() {
+        return unlocked || safeSyncOpening ||
+            (authorizedSettingsSession && $('body').hasClass('settings--open'));
     }
 
     function openAuthorizedSettings() {
         authorizedSettingsSession = true;
+        settingsOpenPermit = true;
         showRestrictedUI();
-
-        try {
-            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
-                Lampa.Controller.toggle('settings');
-            }
-        } catch (err) {
+        try { Lampa.Controller.toggle('settings'); }
+        catch (e) {
             authorizedSettingsSession = false;
             hideRestrictedUI();
+        } finally { settingsOpenPermit = false; }
+    }
+
+    function isKinoPubSettings(component, item) {
+        const name = String(component || '').toLowerCase();
+        const title = item && item.length ? String(item.text() || '').toLowerCase() : '';
+        return name === 'rmediahub_kinopub' ||
+            (/rmediahub|rmedia/.test(name + ' ' + title) && /kino[\s._-]*pub|кинопаб|кинопуб/.test(name + ' ' + title));
+    }
+
+    function guardedSettingsCreate(original) {
+        if (original.__rmedia_settings_create_guard) return original;
+        const guarded = function (component) {
+            const context = this;
+            const args = arguments;
+            let item = $();
+            try {
+                item = Lampa.Settings.main().render().find('.settings-folder').filter(function () {
+                    return String($(this).attr('data-component')) === String(component);
+                }).first();
+            } catch (e) {}
+            const kino = isKinoPubSettings(component, item);
+            const admin = kino || /^(plugins|rmedia_lock)$|filmix|pirat/i.test(String(component)) ||
+                isProtectedSettingsFolder(item);
+            const open = function () {
+                authorizedSettingsSession = true;
+                // Returning from the PIN keyboard reattaches Main. Preserve
+                // its Scroll/event handlers before native create empties body.
+                try { Lampa.Settings.main().render().detach(); } catch (e) {}
+                return original.apply(context, args);
+            };
+            if (protectedComponentPermit === String(component)) {
+                protectedComponentPermit = '';
+                return open();
+            }
+            // KinoPub configuration always requires its requested admin PIN;
+            // playback buttons and the provider's session are not intercepted.
+            if (admin) {
+                askSpecificPin(kino ? KINOPUB_SETTINGS_PIN : getPin(),
+                    kino ? 'PIN KinoPub' : 'RMEDIA ADMIN PIN', open, 'admin');
+                return;
+            }
+            if (!unlocked && !(safeSyncOpening && String(component) === 'account') &&
+                !authorizedSettingsSession) {
+                askMenuPin(open);
+                return;
+            }
+            return original.apply(context, args);
+        };
+        guarded.__rmedia_settings_create_guard = true;
+        return guarded;
+    }
+
+    function installSettingsGuards() {
+        if (!window.Lampa || !Lampa.Controller || !Lampa.Settings) return;
+        if (!Lampa.Controller.toggle.__rmedia_settings_guard) {
+            const original = Lampa.Controller.toggle;
+            const guarded = function (name) {
+                if (name === 'settings') {
+                    const permit = settingsOpenPermit;
+                    settingsOpenPermit = false;
+                    if (!permit && !settingsSessionAllowed()) {
+                        authorizedSettingsSession = false;
+                        askMenuPin(openAuthorizedSettings);
+                        return;
+                    }
+                }
+                const result = original.apply(this, arguments);
+                if (/^(content|head|menu)$/.test(String(name)) &&
+                    !$('body').hasClass('settings--open') && !pinDialogOpen) {
+                    authorizedSettingsSession = false;
+                }
+                return result;
+            };
+            guarded.__rmedia_settings_guard = true;
+            Lampa.Controller.toggle = guarded;
         }
+        if (typeof Lampa.Settings.create === 'function') {
+            Lampa.Settings.create = guardedSettingsCreate(Lampa.Settings.create);
+        }
+        try {
+            // Main stores its own reference to create() before plugins load.
+            // Wrapping only Settings.create would miss native TV folder Enter.
+            const main = Lampa.Settings.main();
+            if (main && typeof main.onCreate === 'function') {
+                main.onCreate = guardedSettingsCreate(main.onCreate);
+            }
+        } catch (e) {}
+        if (Lampa.Extensions && typeof Lampa.Extensions.show === 'function' &&
+            !Lampa.Extensions.show.__rmedia_extensions_guard) {
+            const original = Lampa.Extensions.show;
+            const guarded = function () {
+                const context = this, args = arguments;
+                if (protectedComponentPermit === 'plugins') {
+                    protectedComponentPermit = '';
+                    return original.apply(context, args);
+                }
+                askPin(function () { original.apply(context, args); });
+            };
+            guarded.__rmedia_extensions_guard = true;
+            Lampa.Extensions.show = guarded;
+        }
+    }
+
+    function bindSafePlayerButton() {
+        if (settingsCaptureBound) return;
+        settingsCaptureBound = true;
+        const gate = function (event) {
+            const target = $(event.target);
+            const folder = target.closest('.settings-folder');
+            const component = folder.attr('data-component');
+            if (folder.length && component &&
+                (isProtectedSettingsFolder(folder) || component === 'plugins')) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                const kino = isKinoPubSettings(component, folder);
+                askSpecificPin(kino ? KINOPUB_SETTINGS_PIN : getPin(),
+                    kino ? 'PIN KinoPub' : 'RMEDIA ADMIN PIN', function () {
+                        protectedComponentPermit = String(component);
+                        try {
+                            if (component === 'plugins' && Lampa.Extensions && Lampa.Extensions.show) {
+                                Lampa.Extensions.show();
+                            } else {
+                                Lampa.Settings.main().render().detach();
+                                Lampa.Settings.create(component);
+                            }
+                        } finally { protectedComponentPermit = ''; }
+                    }, 'admin');
+                return;
+            }
+            if (!target.closest('.open--settings').length || settingsSessionAllowed()) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            askMenuPin(openAuthorizedSettings);
+        };
+        // Utils.trigger uses initEvent(name, false, true): TV events do not
+        // bubble to a jQuery handler on document. Native capture runs first.
+        document.addEventListener('hover:enter', gate, true);
+        document.addEventListener('click', gate, true);
+    }
+
+    function hideKinoPubMenu() {
+        $('.menu .menu__item').filter(function () {
+            const item = $(this);
+            const title = String(item.find('.menu__text').text() || '').replace(/\s+/g, ' ').trim();
+            return /rmedia\s*hub.*kino\s*pub/i.test(title) ||
+                String(item.attr('data-action') || '') === 'rmediahub_kinopub';
+        }).remove();
     }
 
     function collectPluginSettings() {
@@ -520,6 +644,7 @@
         const component = String(item.attr('data-component') || '').toLowerCase();
         const title = String(item.find('.settings-folder__name').text() || item.text() || '').trim().toLowerCase();
 
+        if (isKinoPubSettings(component, item)) return true;
         if (component === 'rmedia_lock') return true;
         if (title.indexOf('rmedia lock') >= 0) return true;
 
@@ -565,83 +690,14 @@
     }
 
     function bindProtectedComponentsGate() {
-        if (!window.Lampa || !Lampa.Settings || !Lampa.Settings.main) return;
-
-        let root;
-
+        installSettingsGuards();
         try {
-            root = Lampa.Settings.main().render();
-        } catch (e) {
-            root = $('.settings__body');
-        }
-
-        if (!root || !root.length) return;
-
-        root.find('.settings-folder').each(function () {
-            const item = $(this);
-            if (!isProtectedSettingsFolder(item)) return;
-
-            item.attr('data-rmedia-protected', '1');
-
-            const component = item.attr('data-component');
-
-            /*
-             * DO NOT skip already-marked rows.
-             * Lampa Settings Main.update() re-binds native hover:enter every
-             * time the main settings screen is opened. Therefore our PIN gate
-             * must replace that native handler again on every pass.
-             */
-            item.off('hover:enter');
-
-            item.on('hover:enter.rmedia-protected', function (e) {
-                item.data('rmedia-last-enter', Date.now());
-
-                if (!isEnabled()) {
-                    openProtectedComponent(component);
-                    return;
-                }
-
-                if (e) {
-                    e.preventDefault();
-                    e.stopImmediatePropagation();
-                }
-
-                askPin(function () {
-                    openProtectedComponent(component);
-                });
-
-                return false;
+            const root = Lampa.Settings.main().render();
+            root.find('.settings-folder').each(function () {
+                const item = $(this);
+                if (isProtectedSettingsFolder(item)) item.attr('data-rmedia-protected', '1');
             });
-
-            // Touch Safari can dispatch click in addition to hover:enter.
-            item.off('click.rmedia-protected').on('click.rmedia-protected', function (e) {
-                if (!isEnabled()) return;
-
-                const lastEnter = Number(item.data('rmedia-last-enter') || 0);
-
-                // Same physical click already handled by Lampa hover:enter.
-                if (Date.now() - lastEnter < 700) {
-                    e.preventDefault();
-                    e.stopImmediatePropagation();
-                    return false;
-                }
-
-                // Desktop Chrome does not need a second native click path.
-                // Keep this only as fallback for touch/mobile browsers.
-                const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
-                if (!isTouch) return;
-
-                e.preventDefault();
-                e.stopImmediatePropagation();
-
-                askPin(function () {
-                    openProtectedComponent(component);
-                });
-
-                return false;
-            });
-        });
-
+        } catch (e) {}
         protectedComponentsBound = true;
     }
 
@@ -704,37 +760,9 @@
     }
 
     function bindExtensionsGate() {
-        if (!window.Lampa || !Lampa.Settings || !Lampa.Extensions) return;
-
-        const item = Lampa.Settings.main().render().find('[data-component="plugins"]');
-        if (!item.length) return;
-
-        /*
-         * Native Lampa binds this row to Extensions.show().
-         * Replace that handler with our PIN gate.
-         */
-        item.unbind('hover:enter.rmedia-extpin');
-        item.unbind('hover:enter');
-
-        item.on('hover:enter.rmedia-extpin', function (e) {
-            if (e) {
-                e.preventDefault();
-                e.stopImmediatePropagation();
-            }
-
-            askPin(function () {
-                try {
-                    Lampa.Extensions.show();
-                } catch (err) {
-                    try {
-                        if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Не удалось открыть Расширения');
-                    } catch (e2) {}
-                }
-            });
-
-            return false;
-        });
-
+        // Native Main.update rebinds row events on every opening. Guard the
+        // Extensions.show function instead of repeatedly replacing that row.
+        installSettingsGuards();
         extensionGateBound = true;
     }
 
@@ -886,25 +914,6 @@
         try {
             if (Lampa.Settings && Lampa.Settings.listener && Lampa.Settings.listener.follow) {
                 Lampa.Settings.listener.follow('open', function (e) {
-                    if (e && e.name === 'main' && !unlocked && !authorizedSettingsSession) {
-                        // Native Back can close the settings overlay without
-                        // calling our explicit back handler. Relock the list
-                        // when returning to content, but leave it open for
-                        // back navigation from a tab while settings stay up.
-                        setTimeout(function () {
-                            if (!$('body').hasClass('settings--open')) {
-                                authorizedSettingsSession = false;
-                                hideRestrictedUI();
-                            }
-                        }, 0);
-                    }
-
-                    if (e && e.name === 'main' && authorizedSettingsSession) {
-                        // Back from a section to the native Settings list:
-                        // keep all tabs visible for this authorized session.
-                        return;
-                    }
-
                     if (e && e.name === 'main') {
                         setTimeout(bindExtensionsGate, 0);
                         setTimeout(bindExtensionsGate, 120);
@@ -954,6 +963,8 @@
                 });
 
                 Lampa.Settings.listener.follow('close', function () {
+                    authorizedSettingsSession = false;
+                    settingsOpenPermit = false;
                     safeSyncOpening = false;
                     safeSyncAccountReached = false;
                 });
@@ -1628,6 +1639,9 @@
         addAdminSettings();
         addClientMenuSettings();
         guardConsoleController();
+        installSettingsGuards();
+        bindSafePlayerButton();
+        hideKinoPubMenu();
         hideClientHeadExtras();
         initRemoteControl();
         addClientSyncMenu();
@@ -1651,6 +1665,8 @@
             addClientSyncHead();
             hideRestrictedUI();
             hideClientHeadExtras();
+            hideKinoPubMenu();
+            installSettingsGuards();
 
             if (!extensionGateBound || $('.settings__body').length) {
                 bindExtensionsGate();
@@ -1661,7 +1677,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock TEST48 + Device Binding + Client Settings] Ready');
+        console.log('[RMEDIA Lock 2026-10-26 TV PIN + KinoPub Settings] Ready');
     }
 
     if (window.appready) {
