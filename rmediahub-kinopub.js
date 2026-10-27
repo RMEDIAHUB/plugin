@@ -2345,6 +2345,19 @@ function createRMediaHubShared(options) {
         try {storage.setItem(KEY,JSON.stringify(s));}
         catch(e){throw new Error('local_storage_unavailable');}
     }
+    function searchBody(body) {
+        body=body || {};
+        var card=body.movie || {}, movie={};
+        // Lampa cards can contain large credits, reviews and image galleries.
+        // Matching needs only these bounded scalar fields, never the full card.
+        ['title','name','original_title','original_name','release_date','first_air_date','year',
+            'type','media_type','imdb_id','imdb','kinopoisk_id','kinopoisk'].forEach(function(key){
+            var value=card[key];
+            if(typeof value==='string')movie[key]=value.slice(0,/^(title|name|original_title|original_name)$/.test(key)?1000:64);
+            else if(typeof value==='number' && isFinite(value))movie[key]=value;
+        });
+        return {movie:movie,query:typeof body.query==='string'?body.query.slice(0,150):''};
+    }
     function send(s,path,body,done) {
         var epoch=generation;
         options.transport(s.origin+path,s.key,body,function(error,data){
@@ -2393,7 +2406,7 @@ function createRMediaHubShared(options) {
                 catch(e){done('local_storage_unavailable');}
                 return {abort:function(){}};
             }
-            var j={method:method,path:path,body:body,done:done,cancelled:false};
+            var j={method:method,path:path,body:path==='/api/watch/find'?searchBody(body):body,done:done,cancelled:false};
             queue.push(j);pump();return {abort:function(){j.cancelled=true;}};
         },
         configure:function(value) {
