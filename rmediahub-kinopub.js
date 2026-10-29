@@ -1,4 +1,4 @@
-/*! RMediaHub KinoPub Shared v0.4.1 — MIT, Copyright (c) 2026 RMEDIAHUB.
+/*! RMediaHub KinoPub Shared v0.4.2 — MIT, Copyright (c) 2026 RMEDIAHUB.
  * The permanent shared binding key travels with Lampa cloud export/import.
  * KinoPub OAuth tokens remain on your RMediaHub server; never in this bundle.
  * QR Code Generator: Copyright (c) 2009 Kazuhiko Arase, MIT (header below).
@@ -2635,7 +2635,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
     }
     function playbackDiagnostics() {
         var player=String(L.Storage.field('player') || '').replace(/[^a-z0-9_-]/gi,'').slice(0,30);
-        var report={plugin:'0.4.1',platform:platform(),player:player,
+        var report={plugin:'0.4.2',platform:platform(),player:player,
             format:L.Storage.field('rmediahub_kinopub_format') || 'auto',lastPlayback:lastPlayback};
         L.Modal.open({title:'KinoPub · Проверка воспроизведения',html:$('<pre class="rmhd-report"></pre>').text(JSON.stringify(report,null,2)),
             size:'large',onBack:function(){L.Modal.close();focus();}});
@@ -2686,7 +2686,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                     request('POST','/api/link/cancel',{},function (err) { if (err) toast(err); });
                 }
             }];
-            L.Modal.open({title:'RMediaHub · KinoPub',html:html,size:'large',buttons:buttons,onBack:closeAuth});
+            L.Modal.open({title:'RM · KinoPub',html:html,size:'large',buttons:buttons,onBack:closeAuth});
             function schedule(seconds) { authTimer = setTimeout(poll, Math.max(1, seconds) * 1000); }
             function poll() {
                 if (generation !== authGeneration) return;
@@ -2709,7 +2709,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         request('GET','/api/status',null,function (error, data) {
             if (error) return toast(error);
             var report = {
-                plugin:'RMediaHub 0.4.1', api:BASE, connection:'shared', lampa:L.Manifest.app_version,
+                plugin:'RMediaHub 0.4.2', api:BASE, connection:'shared', lampa:L.Manifest.app_version,
                 state:data.state, expiresAt:data.expiresAt ? new Date(data.expiresAt).toISOString() : null,
                 lastRefreshAt:data.lastRefreshAt ? new Date(data.lastRefreshAt).toISOString() : null,
                 rotations:data.rotations, lastError:data.lastError, notifyError:data.notifyError,
@@ -2740,11 +2740,11 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
     }
     function openSource(movie) {
         if(movie && (movie.title || movie.name))return openWatch(movie);
-        L.Activity.push({url:'',title:'RMediaHub · KinoPub',component:'rmediahub_kinopub_source',movie:movie || null,page:1});
+        L.Activity.push({url:'',title:'RM · KinoPub',component:'rmediahub_kinopub_source',movie:movie || null,page:1});
     }
     function openWatch(movie,itemId) {
         L.Select.close();
-        L.Activity.push({url:'',title:'RMediaHub · KinoPub',component:'rmediahub_kinopub_watch',
+        L.Activity.push({url:'',title:'RM · KinoPub',component:'rmediahub_kinopub_watch',
             movie:movie,itemId:itemId || null,page:1});
     }
     function poster(movie,backdrop) {
@@ -2981,7 +2981,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
     function Source(object) {
         var self=this, scroll=new L.Scroll({mask:true,over:true}), last=false, alive=true, active=false, requests=[];
         var content=$('<div class="rmhd-screen"></div>');
-        $('<div class="rmhd-brand">RMediaHub <small>KinoPub</small></div>').appendTo(content);
+        $('<div class="rmhd-brand">RM <small>KinoPub</small></div>').appendTo(content);
         var state=$('<p class="rmhd-state">Общая привязка KinoPub для всех ваших устройств</p>').appendTo(content);
         function call(method,path,body,cb) {
             var xhr=request(method,path,body,function(err,data) { if(alive) cb(err,data); });
@@ -2996,14 +2996,14 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         function list(q,type,page) {
                 state.text('Загружаем KinoPub…');
             call('GET','/api/items?q='+encodeURIComponent(q || '')+'&type='+encodeURIComponent(type || '')+'&page='+page,null,function(err,data) {
-                state.text(err ? (messages[err] || err) : 'RMediaHub · KinoPub');
+                state.text(err ? (messages[err] || err) : 'RM · KinoPub');
                 if(err) return toast(err);
                 var items=data.items.map(function(item){return {title:escape(item.title),subtitle:escape((item.year || '')+' · '+editionLabel(item.type)),item:item};});
                 var total=Number(data.pagination.total || page),current=Number(data.pagination.current || page);
                 if(current>1) items.push({title:'← Предыдущая страница',page:current-1});
                 if(current<total) items.push({title:'Следующая страница →',page:current+1});
                 if(!items.length) items.push({title:'Ничего не найдено'});
-                choose('RMediaHub · '+(q || 'Каталог'),items,function(a){
+                choose('RM · KinoPub · '+(q || 'Каталог'),items,function(a){
                     if(a.page) list(q,type,a.page);
                     else if(a.item) detail(a.item);
                     else focus();
@@ -3115,23 +3115,20 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                 pendingAudio.applied=true;
             });
         }
-        window.Lampa.Manifest.plugins={type:'video',version:'0.4.1',name:'RMediaHub KinoPub',description:'Общая привязка KinoPub через RMediaHub',
-            component:'rmediahub_kinopub_source',onContextMenu:function(){return {name:'Смотреть в RMediaHub · KinoPub',description:''};},
+        window.Lampa.Manifest.plugins={type:'video',version:'0.4.2',name:'RM · KinoPub',description:'Общая привязка KinoPub через RMediaHub',
+            component:'rmediahub_kinopub_source',onContextMenu:function(){return {name:'Смотреть в RM · KinoPub',description:''};},
             onContextLauch:openSource};
-        L.SettingsApi.addComponent({component:'rmediahub_kinopub',name:'RMediaHub · KinoPub',icon:icon});
+        L.SettingsApi.addComponent({component:'rmediahub_kinopub',name:'RM · KinoPub',icon:icon});
         L.SettingsApi.addParam({component:'rmediahub_kinopub',param:{name:'rmediahub_kinopub_open',type:'button'},
-            field:{name:'Открыть RMediaHub',description:'KinoPub · привязка, поиск и диагностика'},onChange:function(){openSource();}});
+            field:{name:'Открыть RM · KinoPub',description:'KinoPub · привязка, поиск и диагностика'},onChange:function(){openSource();}});
         L.SettingsApi.addParam({component:'rmediahub_kinopub',param:{name:'rmediahub_kinopub_format',type:'select',
             values:{auto:'Автоматически',hls4:'HLS4 · все дорожки',hls:'HLS · выбранная озвучка',hls2:'HLS2 · выбранная озвучка',http:'MP4 HTTPS'},default:'auto'},
             field:{name:'Тип потока KinoPub',description:'Авто: Samsung — HLS с выбранной озвучкой; остальные устройства — HLS4.'}});
-        var menu=$('<li class="menu__item selector"><div class="menu__ico">'+icon+'</div><div class="menu__text">RMediaHub · KinoPub</div></li>');
-        menu.on('hover:enter',function(){openSource();});
-        $('.menu .menu__list').eq(0).append(menu);
         L.Listener.follow('full',function(e){
             if(e.type!=='complite' || !e.body || e.body.find('.view--rmediahub-kp').length) return;
             var card=e.data && e.data.movie;
             if(!card) return;
-            var btn=$('<div class="full-start__button selector view--rmediahub-kp">'+icon+'<span>RMediaHub</span></div>');
+            var btn=$('<div class="full-start__button selector view--rmediahub-kp">'+icon+'<span>RM · KinoPub</span></div>');
             btn.on('hover:enter',function(){openSource(card);});
             e.body.find('.buttons--container').first().append(btn);
         });
