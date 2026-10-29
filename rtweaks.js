@@ -2,7 +2,7 @@
  * RMEDIA Tweaks for Lampa
  * Небольшие улучшения интерфейса без рекламы, аналитики и внешних запросов.
  *
- * Version: 1.1.3
+ * Version: 1.1.4
  * License: MIT
  */
 (function () {
@@ -13,7 +13,7 @@
 
   var ID = 'rmediahub_tweaks';
   var NAME = 'RMEDIA Tweaks';
-  var VERSION = '1.1.3';
+  var VERSION = '1.1.4';
   var observer = null;
   var refreshTimer = null;
   var clockTimer = null;
@@ -175,7 +175,9 @@
         // BWA can omit the old BwaRC subtitle. Check the label and source markers too.
         var source = [text, subtitle, item.className, item.getAttribute('data-source'), item.getAttribute('data-component')].join(' ');
         var kino = /(^|[^a-z0-9])(?:bwa(?:[\s._-]*rc)?|kino[\s._-]*pub)(?=$|[^a-z0-9])/i.test(source);
-        var label = /online_mod/.test(subtitle) ? 'FILMIX' : kino ? 'KINOPUB' : '';
+        // Preserve the explicit names of the standalone RM sources.
+        var rmSource = /^rm\s*·\s*(kinopub|filmix)$/.test(text);
+        var label = rmSource ? '' : /online_mod/.test(subtitle) ? 'FILMIX' : kino ? 'KINOPUB' : '';
 
         // Avoid triggering the DOM observer again when the label is already correct.
         if (itemTitle && label && itemTitle.textContent !== label) itemTitle.textContent = label;
@@ -185,7 +187,7 @@
         item.classList.remove('rm-source-torrent', 'rm-source-online', 'rm-source-trailer');
 
         if (/^(торрент|torrent)/.test(text)) item.classList.add('rm-source-torrent');
-        else if (/^(онлайн|online|filmix|kinopub)/.test(text) || /online_mod/.test(subtitle) || kino) item.classList.add('rm-source-online');
+        else if (/^(онлайн|online|filmix|kinopub)/.test(text) || /online_mod/.test(subtitle) || kino || rmSource) item.classList.add('rm-source-online');
         else if (/^(трейлер|трейлеры|трейлери|trailer)/.test(text)) item.classList.add('rm-source-trailer');
       });
     });
@@ -478,3 +480,4 @@
     setTimeout(start, 500);
   }
 }());
+
