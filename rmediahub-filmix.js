@@ -1,4 +1,4 @@
-/*! RMediaHub Filmix v0.1.0 — MIT, Copyright (c) 2026 RMediaHub. */
+/*! RMediaHub Filmix v0.1.1 — MIT, Copyright (c) 2026 RMediaHub. */
 /*
 MIT License
 
@@ -2529,7 +2529,7 @@ function parseRMediaHubFilmixLink(value) {
     }
     function playbackDiagnostics() {
         var player=String(L.Storage.field('player') || '').replace(/[^a-z0-9_-]/gi,'').slice(0,30);
-        var report={plugin:'0.1.0',platform:platform(),player:player,
+        var report={plugin:'0.1.1',platform:platform(),player:player,
             format:L.Storage.field('rmediahub_filmix_format') || 'auto',lastPlayback:lastPlayback};
         L.Modal.open({title:'Filmix · Проверка воспроизведения',html:$('<pre class="rmhf-report"></pre>').text(JSON.stringify(report,null,2)),
             size:'large',onBack:function(){L.Modal.close();focus();}});
@@ -2589,7 +2589,7 @@ function parseRMediaHubFilmixLink(value) {
                     request('POST','/api/link/cancel',{},function (err) { if (err) toast(err); });
                 }
             }];
-            L.Modal.open({title:'RMediaHub · Filmix',html:html,size:'large',buttons:buttons,onBack:closeAuth});
+            L.Modal.open({title:'RM · Filmix',html:html,size:'large',buttons:buttons,onBack:closeAuth});
             function schedule(seconds) { authTimer = setTimeout(poll, Math.max(1, seconds) * 1000); }
             function poll() {
                 if (generation !== authGeneration) return;
@@ -2612,7 +2612,7 @@ function parseRMediaHubFilmixLink(value) {
         request('GET','/api/status',null,function (error, data) {
             if (error) return toast(error);
             var report = {
-                plugin:'RMediaHub 0.1.0', api:BASE, connection:'shared', lampa:L.Manifest.app_version,
+                plugin:'RMediaHub 0.1.1', api:BASE, connection:'shared', lampa:L.Manifest.app_version,
                 provider:'Filmix',subscription:data.subscription,state:data.state, expiresAt:data.expiresAt ? new Date(data.expiresAt).toISOString() : null,
                 lastRefreshAt:data.lastRefreshAt ? new Date(data.lastRefreshAt).toISOString() : null,
                 rotations:data.rotations, lastError:data.lastError, notifyError:data.notifyError,
@@ -2643,11 +2643,11 @@ function parseRMediaHubFilmixLink(value) {
     }
     function openSource(movie) {
         if(movie && (movie.title || movie.name))return openWatch(movie);
-        L.Activity.push({url:'',title:'RMediaHub · Filmix',component:'rmediahub_filmix_source',movie:movie || null,page:1});
+        L.Activity.push({url:'',title:'RM · Filmix',component:'rmediahub_filmix_source',movie:movie || null,page:1});
     }
     function openWatch(movie,itemId) {
         L.Select.close();
-        L.Activity.push({url:'',title:'RMediaHub · Filmix',component:'rmediahub_filmix_watch',
+        L.Activity.push({url:'',title:'RM · Filmix',component:'rmediahub_filmix_watch',
             movie:movie,itemId:itemId || null,page:1});
     }
     function poster(movie,backdrop) {
@@ -2873,7 +2873,7 @@ function parseRMediaHubFilmixLink(value) {
     function Source(object) {
         var self=this, scroll=new L.Scroll({mask:true,over:true}), last=false, alive=true, active=false, requests=[];
         var content=$('<div class="rmhf-screen"></div>');
-        $('<div class="rmhf-brand">RMediaHub <small>Filmix</small></div>').appendTo(content);
+        $('<div class="rmhf-brand">RM <small>Filmix</small></div>').appendTo(content);
         var state=$('<p class="rmhf-state">Общая привязка Filmix для всех ваших устройств</p>').appendTo(content);
         function call(method,path,body,cb) {
             var xhr=request(method,path,body,function(err,data) { if(alive) cb(err,data); });
@@ -2888,14 +2888,14 @@ function parseRMediaHubFilmixLink(value) {
         function list(q,type,page) {
                 state.text('Загружаем Filmix…');
             call('GET','/api/items?q='+encodeURIComponent(q || '')+'&type='+encodeURIComponent(type || '')+'&page='+page,null,function(err,data) {
-                state.text(err ? (messages[err] || err) : 'RMediaHub · Filmix');
+                state.text(err ? (messages[err] || err) : 'RM · Filmix');
                 if(err) return toast(err);
                 var items=data.items.map(function(item){return {title:escape(item.title),subtitle:escape((item.year || '')+' · '+editionLabel(item.type)),item:item};});
                 var total=Number(data.pagination.total || page),current=Number(data.pagination.current || page);
                 if(current>1) items.push({title:'← Предыдущая страница',page:current-1});
                 if(current<total) items.push({title:'Следующая страница →',page:current+1});
                 if(!items.length) items.push({title:'Ничего не найдено'});
-                choose('RMediaHub · '+(q || 'Каталог'),items,function(a){
+                choose('RM · Filmix · '+(q || 'Каталог'),items,function(a){
                     if(a.page) list(q,type,a.page);
                     else if(a.item) detail(a.item);
                     else focus();
@@ -3006,20 +3006,17 @@ function parseRMediaHubFilmixLink(value) {
                 pendingAudio.applied=true;
             });
         }
-        window.Lampa.Manifest.plugins={type:'video',version:'0.1.0',name:'RMediaHub Filmix',description:'Общая привязка Filmix через RMediaHub',
-            component:'rmediahub_filmix_source',onContextMenu:function(){return {name:'Смотреть в RMediaHub · Filmix',description:''};},
+        window.Lampa.Manifest.plugins={type:'video',version:'0.1.1',name:'RM · Filmix',description:'Общая привязка Filmix через RMediaHub',
+            component:'rmediahub_filmix_source',onContextMenu:function(){return {name:'Смотреть в RM · Filmix',description:''};},
             onContextLauch:openSource};
-        L.SettingsApi.addComponent({component:'rmediahub_filmix',name:'RMediaHub · Filmix',icon:icon});
+        L.SettingsApi.addComponent({component:'rmediahub_filmix',name:'RM · Filmix',icon:icon});
         L.SettingsApi.addParam({component:'rmediahub_filmix',param:{name:'rmediahub_filmix_open',type:'button'},
-            field:{name:'Открыть RMediaHub',description:'Filmix · привязка, поиск и диагностика'},onChange:function(){openSource();}});
-        var menu=$('<li class="menu__item selector"><div class="menu__ico">'+icon+'</div><div class="menu__text">RMediaHub · Filmix</div></li>');
-        menu.on('hover:enter',function(){openSource();});
-        $('.menu .menu__list').eq(0).append(menu);
+            field:{name:'Открыть RM · Filmix',description:'Filmix · привязка, поиск и диагностика'},onChange:function(){openSource();}});
         L.Listener.follow('full',function(e){
             if(e.type!=='complite' || !e.body || e.body.find('.view--rmediahub-fx').length) return;
             var card=e.data && e.data.movie;
             if(!card) return;
-            var btn=$('<div class="full-start__button selector view--rmediahub-fx">'+icon+'<span>Filmix</span></div>');
+            var btn=$('<div class="full-start__button selector view--rmediahub-fx">'+icon+'<span>RM · Filmix</span></div>');
             btn.on('hover:enter',function(){openSource(card);});
             e.body.find('.buttons--container').first().append(btn);
         });
