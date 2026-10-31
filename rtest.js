@@ -5,6 +5,7 @@
     var TARGET = 'https://rmediahub.github.io/plugin/app/';
     var box = null;
     var prevController = 'content';
+    var chosen = false; // true — когда нажали одну из двух кнопок
 
     function say(text) {
         try { Lampa.Noty.show(text, { time: 8000 }); } catch (e) {}
@@ -13,6 +14,7 @@
     }
 
     function go() {
+        chosen = true;
         say('Переходим в RMediaHub…');
         setTimeout(function () {
             try {
@@ -27,10 +29,22 @@
         }, 6000);
     }
 
-    function close() {
+    function hide() {
         if (box && box.parentNode) box.parentNode.removeChild(box);
         box = null;
         try { Lampa.Controller.toggle(prevController || 'content'); } catch (e) {}
+    }
+
+    // «Остаться здесь» — выбор сделан, больше не показываем
+    function stay() {
+        chosen = true;
+        hide();
+    }
+
+    // «Назад» на пульте — прячем, но через 3 секунды покажем снова
+    function back() {
+        hide();
+        setTimeout(show, 3000);
     }
 
     function button(text, action) {
@@ -44,7 +58,7 @@
     }
 
     function show() {
-        if (box) return;
+        if (chosen || box) return;
         try { prevController = Lampa.Controller.enabled().name; } catch (e) {}
 
         box = document.createElement('div');
@@ -56,7 +70,7 @@
             '<div style="opacity:.7;margin-bottom:1em">Сейчас открыто: ' + location.protocol + '//' + location.host + '</div>';
 
         inner.appendChild(button('Перейти в RMediaHub', go));
-        inner.appendChild(button('Остаться здесь', close));
+        inner.appendChild(button('Остаться здесь', stay));
 
         var status = document.createElement('div');
         status.className = 'rtest-status';
@@ -75,7 +89,7 @@
                 },
                 up: function () { Navigator.move('up'); },
                 down: function () { Navigator.move('down'); },
-                back: close
+                back: back
             });
             Lampa.Controller.toggle('rtest');
         } catch (e) {}
@@ -86,7 +100,16 @@
         box.appendChild(style);
     }
 
-    function start() { setTimeout(show, 3000); }
+    function start() {
+        setTimeout(show, 3000);
+        // Подстраховка: если окно пропало само (что-то другое его закрыло),
+        // а выбор не сделан — показываем снова каждые 3 секунды
+        setInterval(function () {
+            if (chosen) return;
+            if (box && !document.body.contains(box)) box = null;
+            if (!box) show();
+        }, 3000);
+    }
 
     if (window.appready) start();
     else Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') start(); });
