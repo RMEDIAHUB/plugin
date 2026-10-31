@@ -3,7 +3,7 @@
 
     if (window.rmedia_lock_test48_ready) return;
     window.rmedia_lock_test48_ready = true;
-    window.rmedia_lock_ui_version = '2026-10-26-tv-pin-1';
+    window.rmedia_lock_ui_version = '2026-10-31-pin2-failclosed';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -29,7 +29,6 @@
     let protectedComponentPermit = '';
     let settingsCaptureBound = false;
     let pinDialogOpen = false;
-    const KINOPUB_SETTINGS_PIN = '2580';
 
     function storageGet(name, fallback) {
         try {
@@ -50,11 +49,149 @@
         return String(storageGet(ENABLED_KEY, 'true')) !== 'false';
     }
 
-    function getPin() {
-        let pin = String(storageGet(PIN_KEY, '2580') || '2580').trim();
-        if (!/^\d{4,8}$/.test(pin)) pin = '2580';
-        return pin;
+    // ===== ADMIN PIN v2 =====
+    // В коде нет ни одного PIN. Админ-PIN проверяется двумя способами:
+    //  1) PIN по ключу клиента: 6 цифр из SHA-256('rmedia-admin-pin:v1:' + Client Key).
+    //     Ключ знает только админка, поэтому PIN уникален для каждого клиента.
+    //     Считать: pin-calculator.html.
+    //  2) Свой PIN, заданный на устройстве (хранится только как солёный хеш).
+    const PIN_HASH_KEY = 'rmedia_lock_pin_hash';
+    const PIN_SALT_KEY = 'rmedia_lock_pin_salt';
+    const LEGACY_PUBLIC_PINS = ['2580', '1111'];
+
+    function sha256Hex(ascii) {
+        // Компактный SHA-256 без WebCrypto: работает на старых Tizen/webOS.
+        function rr(v, n) { return (v >>> n) | (v << (32 - n)); }
+        const bytes = unescape(encodeURIComponent(String(ascii)));
+        const K = [], H = [];
+        let primeCount = 0;
+        for (let c = 2; primeCount < 64; c++) {
+            let prime = true;
+            for (let d = 2; d * d <= c; d++) if (c % d === 0) { prime = false; break; }
+            if (!prime) continue;
+            if (primeCount < 8) H[primeCount] = (Math.pow(c, 1 / 2) * 4294967296) | 0;
+            K[primeCount++] = (Math.pow(c, 1 / 3) * 4294967296) | 0;
+        }
+        const words = [];
+        const bitLen = bytes.length * 8;
+        let msg = bytes + '\x80';
+        while (msg.length % 64 !== 56) msg += '\x00';
+        for (let i = 0; i < msg.length; i++) words[i >> 2] |= msg.charCodeAt(i) << ((3 - i) % 4) * 8;
+        words[words.length] = Math.floor(bitLen / 4294967296);
+        words[words.length] = bitLen | 0;
+        for (let j = 0; j < words.length; j += 16) {
+            const w = words.slice(j, j + 16);
+            const old = H.slice(0);
+            for (let i = 0; i < 64; i++) {
+                if (i >= 16) {
+                    const w15 = w[i - 15], w2 = w[i - 2];
+                    w[i] = (w[i - 16] + (rr(w15, 7) ^ rr(w15, 18) ^ (w15 >>> 3)) + w[i - 7] +
+                        (rr(w2, 17) ^ rr(w2, 19) ^ (w2 >>> 10))) | 0;
+                }
+                const a = H[0], e = H[4];
+                const t1 = H[7] + (rr(e, 6) ^ rr(e, 11) ^ rr(e, 25)) + ((e & H[5]) ^ (~e & H[6])) + K[i] + (w[i] | 0);
+                const t2 = (rr(a, 2) ^ rr(a, 13) ^ rr(a, 22)) + ((a & H[1]) ^ (a & H[2]) ^ (H[1] & H[2]));
+                H.unshift((t1 + t2) | 0);
+                H[4] = (H[4] + t1) | 0;
+                H.length = 8;
+            }
+            for (let i = 0; i < 8; i++) H[i] = (H[i] + old[i]) | 0;
+        }
+        let out = '';
+        for (let i = 0; i < 8; i++) out += ('00000000' + (H[i] >>> 0).toString(16)).slice(-8);
+        return out;
     }
+
+    function keyDerivedPin() {
+        let key = '';
+        try {
+            key = String(storageGet('rmedia_remote_client_key', '') || '').trim();
+        } catch (e) {}
+        if (!key || key === 'не задано' || key === 'undefined' || key === 'null') return '';
+        const hex = sha256Hex('rmedia-admin-pin:v1:' + key);
+        return ('000000' + (parseInt(hex.slice(0, 8), 16) % 1000000)).slice(-6);
+    }
+
+    function storageSetLocal(name, value) {
+        try { if (window.Lampa && Lampa.Storage) { Lampa.Storage.set(name, value); return; } } catch (e) {}
+        try { localStorage.setItem(name, value); } catch (e) {}
+    }
+
+    function randomSalt() {
+        const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        let s = '';
+        try {
+            const b = new Uint8Array(16);
+            window.crypto.getRandomValues(b);
+            for (let i = 0; i < b.length; i++) s += alphabet.charAt(b[i] % alphabet.length);
+        } catch (e) {
+            for (let i = 0; i < 16; i++) s += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+        }
+        return s;
+    }
+
+    function setCustomPin(pin) {
+        const salt = randomSalt();
+        storageSetLocal(PIN_SALT_KEY, salt);
+        storageSetLocal(PIN_HASH_KEY, sha256Hex(salt + ':' + pin));
+        storageSetLocal(PIN_KEY, '');
+    }
+
+    function clearCustomPin() {
+        storageSetLocal(PIN_HASH_KEY, '');
+        storageSetLocal(PIN_SALT_KEY, '');
+    }
+
+    function hasCustomPin() {
+        return !!String(storageGet(PIN_HASH_KEY, '') || '');
+    }
+
+    function migrateLegacyPin() {
+        // Старый открытый PIN: свой — переводим в хеш, публичный дефолт — удаляем.
+        const legacy = String(storageGet(PIN_KEY, '') || '').trim();
+        if (!legacy) return;
+        if (/^\d{4,8}$/.test(legacy) && LEGACY_PUBLIC_PINS.indexOf(legacy) === -1 && !hasCustomPin()) {
+            setCustomPin(legacy);
+        } else {
+            storageSetLocal(PIN_KEY, '');
+        }
+    }
+
+    function verifyAdminPin(value) {
+        const pin = String(value || '').trim();
+        if (!/^\d{4,8}$/.test(pin)) return false;
+        const derived = keyDerivedPin();
+        if (derived && pin === derived) return true;
+        const hash = String(storageGet(PIN_HASH_KEY, '') || '');
+        const salt = String(storageGet(PIN_SALT_KEY, '') || '');
+        return !!hash && sha256Hex(salt + ':' + pin) === hash;
+    }
+
+    function getPin() {
+        return verifyAdminPin;
+    }
+
+    function promptNewAdminPin() {
+        if (!window.Lampa || !Lampa.Input || typeof Lampa.Input.edit !== 'function') return;
+        askPin(function () {
+            Lampa.Input.edit({ title: 'Новый PIN администратора (4–8 цифр)', value: '', free: true, nosave: true, nomic: true, password: true }, function (first) {
+                first = String(first || '').trim();
+                if (!/^\d{4,8}$/.test(first) || LEGACY_PUBLIC_PINS.indexOf(first) !== -1) {
+                    Lampa.Noty.show('PIN не сохранён: нужно 4–8 цифр, не 2580 и не 1111');
+                    return;
+                }
+                Lampa.Input.edit({ title: 'Повторите PIN', value: '', free: true, nosave: true, nomic: true, password: true }, function (second) {
+                    if (String(second || '').trim() !== first) {
+                        Lampa.Noty.show('PIN не совпал, ничего не изменено');
+                        return;
+                    }
+                    setCustomPin(first);
+                    Lampa.Noty.show('PIN администратора сохранён');
+                });
+            });
+        });
+    }
+    // ===== /ADMIN PIN v2 =====
 
     function getMenuPin() {
         let pin = String(storageGet(MENU_PIN_KEY, '1111') || '1111').trim();
@@ -190,6 +327,11 @@
         } catch (e) {}
     }
 
+    function pinMatches(expected, value) {
+        if (typeof expected === 'function') return !!expected(value);
+        return String(value || '').trim() === String(expected);
+    }
+
     function askSpecificPin(expected, title, onSuccess, wrongMode, onDone) {
         // Native TV Enter does not bubble. Keep one PIN dialog for all entry
         // paths, including a click followed by Lampa's synthetic Enter.
@@ -240,7 +382,7 @@
                     if (submitted) return;
                     submitted = true;
                     restoreOrigin(function () {
-                        const ok = !cancelled && String(value || '').trim() === String(expected);
+                        const ok = !cancelled && pinMatches(expected, value);
                         finishOnce();
                         if (ok) onSuccess();
                         else {
@@ -273,7 +415,7 @@
         const entered = window.prompt(title || 'RMEDIA PIN');
         finishOnce();
         if (entered === null) return;
-        if (String(entered).trim() === String(expected)) onSuccess();
+        if (pinMatches(expected, entered)) onSuccess();
         else notifyWrong();
     }
 
@@ -394,7 +536,7 @@
             // KinoPub configuration always requires its requested admin PIN;
             // playback buttons and the provider's session are not intercepted.
             if (admin) {
-                askSpecificPin(kino ? KINOPUB_SETTINGS_PIN : getPin(),
+                askSpecificPin(getPin(),
                     kino ? 'PIN KinoPub' : 'RMEDIA ADMIN PIN', open, 'admin');
                 return;
             }
@@ -472,7 +614,7 @@
                 event.preventDefault();
                 event.stopImmediatePropagation();
                 const kino = isKinoPubSettings(component, folder);
-                askSpecificPin(kino ? KINOPUB_SETTINGS_PIN : getPin(),
+                askSpecificPin(getPin(),
                     kino ? 'PIN KinoPub' : 'RMEDIA ADMIN PIN', function () {
                         protectedComponentPermit = String(component);
                         try {
@@ -1013,15 +1155,23 @@
 
         Lampa.SettingsApi.addParam({
             component: 'rmedia_lock',
-            param: {
-                name: PIN_KEY,
-                type: 'input',
-                values: '',
-                default: '2580'
-            },
+            param: { name: 'rmedia_lock_pin_change', type: 'button' },
             field: {
-                name: 'PIN администратора',
-                description: 'Используется и для входа в Расширения'
+                name: 'Сменить PIN администратора',
+                description: 'Свой PIN для этого устройства. PIN по ключу клиента работает всегда.'
+            },
+            onChange: function () { promptNewAdminPin(); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
+            param: { name: 'rmedia_lock_pin_reset', type: 'button' },
+            field: {
+                name: 'Удалить свой PIN',
+                description: 'Останется только PIN по ключу клиента'
+            },
+            onChange: function () {
+                askPin(function () { clearCustomPin(); Lampa.Noty.show('Свой PIN удалён'); });
             }
         });
     }
@@ -1104,8 +1254,25 @@
     function focusRemoteOverlay() {
         if (!remoteOverlay) return;
         try { Lampa.Controller.toggle('rmedia_remote_lock'); } catch(e) {}
-        const button = remoteOverlay.find('.rmedia-contact');
+        let button = remoteOverlay.find('.rmedia-activate');
+        if (!button.length) button = remoteOverlay.find('.rmedia-contact');
         if (button.length && button[0].focus) button[0].focus();
+    }
+
+    function moveRemoteFocus(direction) {
+        if (!remoteOverlay) return;
+        try {
+            if (window.Navigator && typeof Navigator.move === 'function' && Navigator.canmove && Navigator.canmove(direction)) {
+                Navigator.move(direction);
+                return;
+            }
+        } catch (e) {}
+        const items = remoteOverlay.find('.selector');
+        if (items.length < 2) return focusRemoteOverlay();
+        const current = items.index(remoteOverlay.find('.selector.focus'));
+        const next = direction === 'left' || direction === 'up'
+            ? Math.max(0, current - 1) : Math.min(items.length - 1, current + 1);
+        try { Lampa.Controller.collectionFocus(items[next], remoteOverlay); } catch (e) { focusRemoteOverlay(); }
     }
 
     function remoteGet(name, fallback) {
@@ -1350,12 +1517,118 @@
         else showRemoteOverlay(data.status, data.message || '', data);
     }
 
+    // ===== ACTIVATION (fail-closed) =====
+    let activationBusy = false;
+
+    function activationInput(title, password, done) {
+        try {
+            Lampa.Input.edit({ title: title, value: '', free: true, nosave: true, nomic: true, password: !!password },
+                function (value) { done(String(value || '').trim()); });
+        } catch (e) {
+            const v = window.prompt(title);
+            done(v === null ? '' : String(v).trim());
+        }
+    }
+
+    async function tryActivate(id, key) {
+        const device = detectDeviceInfo();
+        const r = await fetch(remoteApi() + '/v1/client/heartbeat?_=' + Date.now(), {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                id: id, key: key,
+                install_id: device.install_id,
+                device_name: device.device_name,
+                platform: device.platform,
+                user_agent: device.user_agent
+            })
+        });
+        if (r.status === 401 || r.status === 403 || r.status === 404) return { ok: false, reason: 'Неверный Client ID или ключ' };
+        if (!r.ok) return { ok: false, reason: 'Сервер недоступен (HTTP ' + r.status + '). Повторите позже.' };
+        const data = await r.json();
+        if (!data || data.id !== id || !data.status) return { ok: false, reason: 'Некорректный ответ сервера' };
+        return { ok: true, data: data };
+    }
+
+    function startActivation() {
+        if (activationBusy) return;
+        activationBusy = true;
+        activationInput('Client ID (например RM-1A2B3C4D)', false, function (id) {
+            if (!id) { activationBusy = false; focusRemoteOverlay(); return; }
+            activationInput('Client Key', true, async function (key) {
+                if (!key) { activationBusy = false; focusRemoteOverlay(); return; }
+                try { Lampa.Noty.show('Проверяем доступ…'); } catch (e) {}
+                try {
+                    const res = await tryActivate(id, key);
+                    if (!res.ok) {
+                        showActivationOverlay(res.reason);
+                        return;
+                    }
+                    // Сохраняем только проверенную сервером пару.
+                    remoteSet(REMOTE_ID_KEY, id);
+                    remoteSet(REMOTE_KEY_KEY, key);
+                    applyRemoteStatus(res.data);
+                    try { Lampa.Noty.show('Устройство активировано'); } catch (e) {}
+                } catch (e) {
+                    showActivationOverlay('Не удалось связаться с сервером. Проверьте интернет.');
+                } finally {
+                    activationBusy = false;
+                }
+            });
+        });
+    }
+
+    function showActivationOverlay(message) {
+        const signature = JSON.stringify(['activation', message]);
+        if (!remoteOverlay) {
+            try {
+                const origin = Lampa.Controller.enabled();
+                remoteOriginController = origin && origin.name || 'content';
+            } catch(e) {}
+            remoteOverlay = $('<div class="rmedia-remote-lock"></div>');
+            remoteOverlay.css({
+                position: 'fixed', inset: '0', zIndex: '999999', background: '#090909', color: '#fff',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px', textAlign: 'center'
+            });
+            remoteOverlay.attr('role', 'dialog').attr('aria-modal', 'true');
+            $('body').append(remoteOverlay);
+        }
+        if (signature === remoteOverlaySignature) { focusRemoteOverlay(); return; }
+        remoteOverlaySignature = signature;
+        const contact = remoteContact(null);
+        const btn = 'display:inline-block;margin:8px;padding:14px 20px;border:2px solid #8ab4ff;border-radius:12px;color:#8ab4ff;font-weight:600;';
+        remoteOverlay.html(
+            '<div style="max-width:720px">' +
+                '<div style="font-size:42px;font-weight:700;margin-bottom:18px">RMEDIAHUB</div>' +
+                '<div style="font-size:28px;margin-bottom:12px">Устройство не активировано</div>' +
+                '<div style="font-size:20px;opacity:.75;margin-bottom:10px">' +
+                    remoteEscape(message || 'Введите код доступа или свяжитесь с администратором.') + '</div>' +
+                '<div style="font-size:18px;margin-top:26px">' +
+                    '<a class="rmedia-activate selector" tabindex="0" href="#" style="' + btn + '">Ввести код доступа</a>' +
+                    '<a class="rmedia-contact selector" tabindex="0" href="' + remoteEscape(contact) + '" target="_blank" rel="noopener noreferrer" style="' + btn + '">Связаться с администратором</a>' +
+                    '<div style="margin-top:12px;overflow-wrap:anywhere">' + remoteEscape(contact.replace(/^https?:\/\//, '')) + '</div>' +
+                '</div>' +
+            '</div>'
+        );
+        remoteOverlay.find('.rmedia-activate').on('hover:enter.rmedia click.rmedia', function (e) {
+            if (e && e.preventDefault) e.preventDefault();
+            startActivation();
+        });
+        remoteOverlay.find('.rmedia-contact').on('hover:enter.rmedia-contact', function () {
+            if (this.click) this.click();
+        });
+        focusRemoteOverlay();
+    }
+    // ===== /ACTIVATION =====
+
     async function checkRemoteStatus() {
         const id = remoteClientId();
         const key = remoteClientKey();
 
-        // Пока клиент не привязан — не блокируем. Привязку делает админ.
-        if (!id || !key) { remoteData = null; removeRemoteOverlay(); return; }
+        // Fail-closed: без привязки контент закрыт, показываем экран активации.
+        // Раньше здесь был обход: сброс данных Лампы = бесплатный доступ.
+        if (!id || !key) { remoteData = null; if (!activationBusy) showActivationOverlay(''); return; }
         if (remoteChecking) return;
 
         const device = detectDeviceInfo();
@@ -1386,7 +1659,9 @@
             });
             if (requestScope !== remoteScope()) return;
             if (r.status === 401 || r.status === 403 || r.status === 404) {
-                applyRemoteStatus({id:id,status:'blocked',message:'Клиент не найден или ключ доступа изменён.'});
+                remoteData = null;
+                remoteSet(REMOTE_CACHE_KEY, 'null');
+                showActivationOverlay('Клиент не найден или ключ доступа изменён. Введите актуальный код доступа.');
                 return;
             }
             if (!r.ok) throw new Error('HTTP '+r.status);
@@ -1477,10 +1752,10 @@
                     Lampa.Controller.collectionFocus(false, remoteOverlay);
                 },
                 back: focusRemoteOverlay,
-                up: focusRemoteOverlay,
-                down: focusRemoteOverlay,
-                left: focusRemoteOverlay,
-                right: focusRemoteOverlay
+                up: function () { moveRemoteFocus('up'); },
+                down: function () { moveRemoteFocus('down'); },
+                left: function () { moveRemoteFocus('left'); },
+                right: function () { moveRemoteFocus('right'); }
             });
         } catch(e) {}
         try {
@@ -1635,6 +1910,7 @@
     }
 
     function init() {
+        migrateLegacyPin();
         installIphoneCardLayout();
         addAdminSettings();
         addClientMenuSettings();
@@ -1677,7 +1953,7 @@
             }
         }, 1000);
 
-        console.log('[RMEDIA Lock 2026-10-26 TV PIN + KinoPub Settings] Ready');
+        console.log('[RMEDIA Lock 2026-10-31 PIN v2 + fail-closed activation] Ready');
     }
 
     if (window.appready) {
