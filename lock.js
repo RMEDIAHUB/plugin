@@ -1876,6 +1876,19 @@
                 right: function () { moveRemoteFocus('right'); }
             });
         } catch(e) {}
+        // Сторож пульта: пока экран блокировки виден, Лампа (главный экран,
+        // который догружается позже) не должна забирать себе пульт.
+        // Во время ввода кода (activationBusy / экран спрятан) не вмешиваемся.
+        try {
+            Lampa.Controller.listener.follow('toggle', function (e) {
+                if (!remoteOverlay || activationBusy) return;
+                if (!e || e.name === 'rmedia_remote_lock') return;
+                if (remoteOverlay.css('display') === 'none') return;
+                setTimeout(function () {
+                    if (remoteOverlay && !activationBusy && remoteOverlay.css('display') !== 'none') focusRemoteOverlay();
+                }, 0);
+            });
+        } catch(e) {}
         try {
             const cached = JSON.parse(remoteGet(REMOTE_CACHE_KEY, 'null'));
             if (cached && cached._scope === remoteScope()) {
