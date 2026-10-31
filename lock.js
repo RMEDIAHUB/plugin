@@ -345,7 +345,8 @@
         if (!name) return false;
         if (/^(settings|settings_component|extensions|extension|plugins|select|selectbox|modal|keybord)$/i.test(name)) {
             // Эти экраны после отмены PIN уже закрыты — возвращаться в них нельзя.
-            if (/^settings/.test(name)) return $('body').hasClass('settings--open') && $('.settings__body').length > 0;
+            // В настройки возвращаемся как раньше (ошибка там теперь ловится).
+            if (/^settings/.test(name)) return true;
             return false;
         }
         return true;
