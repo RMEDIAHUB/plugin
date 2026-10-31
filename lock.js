@@ -3,7 +3,7 @@
 
     if (window.rmedia_lock_test48_ready) return;
     window.rmedia_lock_test48_ready = true;
-    window.rmedia_lock_ui_version = '2026-10-31-pin2-failclosed';
+    window.rmedia_lock_ui_version = '2026-10-31-pin2-failclosed-b';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -1551,13 +1551,33 @@
         return { ok: true, data: data };
     }
 
+    // Клавиатура Лампы рисуется ниже нашего экрана (z-index), поэтому
+    // на время ввода прячем экран блокировки и всегда возвращаем его обратно.
+    let activationGuardTimer = null;
+    function hideOverlayForInput() {
+        if (remoteOverlay) remoteOverlay.css('display', 'none');
+        clearTimeout(activationGuardTimer);
+        activationGuardTimer = setTimeout(function () {
+            activationBusy = false;
+            restoreOverlayAfterInput();
+            checkRemoteStatus();
+        }, 3 * 60 * 1000);
+    }
+    function restoreOverlayAfterInput() {
+        clearTimeout(activationGuardTimer);
+        if (remoteOverlay) remoteOverlay.css('display', 'flex');
+        focusRemoteOverlay();
+    }
+
     function startActivation() {
         if (activationBusy) return;
         activationBusy = true;
+        hideOverlayForInput();
         activationInput('Client ID (например RM-1A2B3C4D)', false, function (id) {
-            if (!id) { activationBusy = false; focusRemoteOverlay(); return; }
+            if (!id) { activationBusy = false; restoreOverlayAfterInput(); return; }
             activationInput('Client Key', true, async function (key) {
-                if (!key) { activationBusy = false; focusRemoteOverlay(); return; }
+                if (!key) { activationBusy = false; restoreOverlayAfterInput(); return; }
+                restoreOverlayAfterInput();
                 try { Lampa.Noty.show('Проверяем доступ…'); } catch (e) {}
                 try {
                     const res = await tryActivate(id, key);
@@ -1605,7 +1625,7 @@
                 '<div style="font-size:20px;opacity:.75;margin-bottom:10px">' +
                     remoteEscape(message || 'Введите код доступа или свяжитесь с администратором.') + '</div>' +
                 '<div style="font-size:18px;margin-top:26px">' +
-                    '<a class="rmedia-activate selector" tabindex="0" href="#" style="' + btn + '">Ввести код доступа</a>' +
+                    '<a class="rmedia-activate selector" tabindex="0" role="button" style="cursor:pointer;' + btn + '">Ввести код доступа</a>' +
                     '<a class="rmedia-contact selector" tabindex="0" href="' + remoteEscape(contact) + '" target="_blank" rel="noopener noreferrer" style="' + btn + '">Связаться с администратором</a>' +
                     '<div style="margin-top:12px;overflow-wrap:anywhere">' + remoteEscape(contact.replace(/^https?:\/\//, '')) + '</div>' +
                 '</div>' +
@@ -1613,7 +1633,8 @@
         );
         remoteOverlay.find('.rmedia-activate').on('hover:enter.rmedia click.rmedia', function (e) {
             if (e && e.preventDefault) e.preventDefault();
-            startActivation();
+            if (e && e.stopPropagation) e.stopPropagation();
+            setTimeout(startActivation, 0);
         });
         remoteOverlay.find('.rmedia-contact').on('hover:enter.rmedia-contact', function () {
             if (this.click) this.click();
