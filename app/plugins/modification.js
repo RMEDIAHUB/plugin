@@ -16,7 +16,7 @@
 
         // --- Чужие ---
         'http://si.skaz.tv/s.js', // работает на http://rmediahub.cc (на https-копии GitHub — нет)
-        'https://app.bwa.ad/online.js',
+        // 'https://app.bwa.ad/online.js', // BWA (показывался как KINOPUB) — убран по просьбе
         'https://bwa.ad/re',
         'https://levende.github.io/lampa-plugins/tmdb-networks.js',
         'https://lampaplugins.github.io/store/store.js',
