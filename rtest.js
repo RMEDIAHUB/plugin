@@ -2,7 +2,7 @@
 // Ставится только вручную на тестовый телевизор. Клиентам НЕ добавлять.
 // Ничего не делает сам: показывает окно, переход только по нажатию.
 (function () {
-    var TARGET = 'https://rmediahub.github.io/plugin/app/';
+    var TARGET = 'http://rmediahub.cc/';
     var box = null;
     var prevController = 'content';
     var chosen = false; // true — когда нажали одну из двух кнопок
