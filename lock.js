@@ -3,7 +3,7 @@
 
     if (window.rmedia_lock_test48_ready) return;
     window.rmedia_lock_test48_ready = true;
-    window.rmedia_lock_ui_version = '2026-10-31-pin2-codes-hb';
+    window.rmedia_lock_ui_version = '2026-10-31-pin2-codes-hb-tvback';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -327,6 +327,30 @@
         } catch (e) {}
     }
 
+    // Аварийный выход: если Лампа после отмены PIN оказалась в «полуоткрытом»
+    // экране (настройки/расширения уже закрыты, а управление осталось там),
+    // возвращаем пульт на главный экран вместо зелёного окна ошибки.
+    let rawControllerToggle = null;
+    function safeHome() {
+        try { $('body').removeClass('settings--open selectbox--open'); } catch (e) {}
+        const raw = rawControllerToggle || (window.Lampa && Lampa.Controller && Lampa.Controller.toggle);
+        for (const name of ['content', 'head']) {
+            try { raw.call(Lampa.Controller, name); return true; } catch (e) {}
+        }
+        return false;
+    }
+
+    function originStillOpen(name) {
+        name = String(name || '');
+        if (!name) return false;
+        if (/^(settings|settings_component|extensions|extension|plugins|select|selectbox|modal|keybord)$/i.test(name)) {
+            // Эти экраны после отмены PIN уже закрыты — возвращаться в них нельзя.
+            if (/^settings/.test(name)) return $('body').hasClass('settings--open') && $('.settings__body').length > 0;
+            return false;
+        }
+        return true;
+    }
+
     function pinMatches(expected, value) {
         if (typeof expected === 'function') return !!expected(value);
         return String(value || '').trim() === String(expected);
@@ -365,9 +389,12 @@
                     if (originController === 'settings' && authorizedSettingsSession) {
                         settingsOpenPermit = true;
                     }
-                    Lampa.Controller.toggle(originController);
+                    if (originStillOpen(originController)) Lampa.Controller.toggle(originController);
+                    else safeHome();
+                } else {
+                    safeHome();
                 }
-            } catch (e) {}
+            } catch (e) { safeHome(); }
             setTimeout(callback, 80);
         }
         function notifyWrong() {
@@ -565,7 +592,16 @@
                         return;
                     }
                 }
-                const result = original.apply(this, arguments);
+                let result;
+                try {
+                    result = original.apply(this, arguments);
+                } catch (err) {
+                    console.warn('[RMEDIA Lock] toggle failed, recovering', name, err);
+                    if (!/^(content|head)$/.test(String(name)) || !safeHome()) {
+                        if (String(name) !== 'content') safeHome();
+                    }
+                    return;
+                }
                 if (/^(content|head|menu)$/.test(String(name)) &&
                     !$('body').hasClass('settings--open') && !pinDialogOpen) {
                     authorizedSettingsSession = false;
@@ -1895,6 +1931,7 @@
         if (!window.Lampa || !Lampa.Controller || Lampa.Controller.__rmedia_console_guard) return;
 
         const originalToggle = Lampa.Controller.toggle.bind(Lampa.Controller);
+        if (!rawControllerToggle) rawControllerToggle = originalToggle;
 
         Lampa.Controller.toggle = function (name) {
             if (!unlocked && (name === 'console' || name === 'console-tabs' || name === 'console-body')) {
@@ -1905,7 +1942,18 @@
                 return;
             }
 
-            return originalToggle.apply(null, arguments);
+            try {
+                return originalToggle.apply(null, arguments);
+            } catch (err) {
+                // Битое состояние экрана (например, «Назад» на клавиатуре PIN на ТВ):
+                // не даём Лампе показать зелёное окно и зависнуть.
+                console.warn('[RMEDIA Lock] controller toggle failed', name, err);
+                try { $('body').removeClass('settings--open selectbox--open'); } catch (e) {}
+                if (name !== 'content') {
+                    try { return originalToggle('content'); } catch (e2) {}
+                }
+                try { return originalToggle('head'); } catch (e3) {}
+            }
         };
 
         Lampa.Controller.__rmedia_console_guard = true;
@@ -1990,7 +2038,22 @@
         document.head.appendChild(style);
     }
 
+    function installBackCrashGuard() {
+        // На Samsung после отмены PIN Лампа иногда оставляет активным уже
+        // закрытый экран «Расширения»; его «Назад» падает (destroy of null).
+        // Ловим именно этот случай и возвращаем на главный экран.
+        window.addEventListener('error', function (event) {
+            const msg = String(event && event.message || '');
+            if (!/reading '(destroy|length)'/.test(msg)) return;
+            const stack = String(event && event.error && event.error.stack || '');
+            if (!/onBack|toggle|Line\.|Main\./.test(stack + msg)) return;
+            try { event.preventDefault(); event.stopImmediatePropagation(); } catch (e) {}
+            setTimeout(safeHome, 0);
+        }, true);
+    }
+
     function init() {
+        installBackCrashGuard();
         migrateLegacyPin();
         installIphoneCardLayout();
         addAdminSettings();
