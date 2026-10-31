@@ -3,7 +3,7 @@
 
     if (window.rmedia_lock_test48_ready) return;
     window.rmedia_lock_test48_ready = true;
-    window.rmedia_lock_ui_version = '2026-10-31-pin2-failclosed-b';
+    window.rmedia_lock_ui_version = '2026-10-31-pin2-codes';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -1569,32 +1569,75 @@
         focusRemoteOverlay();
     }
 
+    async function redeemCode(code) {
+        const r = await fetch(remoteApi() + '/v1/client/redeem', {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ code: code })
+        });
+        if (r.status === 429) return { ok: false, reason: 'Слишком много попыток. Повторите через час.' };
+        if (!r.ok) return { ok: false, reason: 'Неверный или просроченный код. Попросите новый у администратора.' };
+        const data = await r.json();
+        if (!data || !data.id || !data.key) return { ok: false, reason: 'Некорректный ответ сервера' };
+        return { ok: true, id: String(data.id), key: String(data.key) };
+    }
+
+    async function finishActivation(id, key) {
+        try { Lampa.Noty.show('Проверяем доступ…'); } catch (e) {}
+        try {
+            const res = await tryActivate(id, key);
+            if (!res.ok) {
+                showActivationOverlay(res.reason);
+                return;
+            }
+            // Сохраняем только проверенную сервером пару.
+            remoteSet(REMOTE_ID_KEY, id);
+            remoteSet(REMOTE_KEY_KEY, key);
+            applyRemoteStatus(res.data);
+            try { Lampa.Noty.show('Устройство активировано'); } catch (e) {}
+        } catch (e) {
+            showActivationOverlay('Не удалось связаться с сервером. Проверьте интернет.');
+        } finally {
+            activationBusy = false;
+        }
+    }
+
     function startActivation() {
         if (activationBusy) return;
         activationBusy = true;
         hideOverlayForInput();
-        activationInput('Client ID (например RM-1A2B3C4D)', false, function (id) {
-            if (!id) { activationBusy = false; restoreOverlayAfterInput(); return; }
-            activationInput('Client Key', true, async function (key) {
-                if (!key) { activationBusy = false; restoreOverlayAfterInput(); return; }
-                restoreOverlayAfterInput();
-                try { Lampa.Noty.show('Проверяем доступ…'); } catch (e) {}
-                try {
-                    const res = await tryActivate(id, key);
-                    if (!res.ok) {
-                        showActivationOverlay(res.reason);
-                        return;
-                    }
-                    // Сохраняем только проверенную сервером пару.
-                    remoteSet(REMOTE_ID_KEY, id);
-                    remoteSet(REMOTE_KEY_KEY, key);
-                    applyRemoteStatus(res.data);
-                    try { Lampa.Noty.show('Устройство активировано'); } catch (e) {}
-                } catch (e) {
-                    showActivationOverlay('Не удалось связаться с сервером. Проверьте интернет.');
-                } finally {
+        // Обычный путь: 8 цифр из админки. Запасной: Client ID (RM-…) + ключ.
+        activationInput('Код активации (8 цифр)', false, function (value) {
+            value = String(value || '').trim();
+            if (!value) { activationBusy = false; restoreOverlayAfterInput(); return; }
+            const digits = value.replace(/\D/g, '');
+            if (/^RM-/i.test(value)) {
+                const id = value.toUpperCase();
+                activationInput('Client Key', true, function (key) {
+                    if (!key) { activationBusy = false; restoreOverlayAfterInput(); return; }
+                    restoreOverlayAfterInput();
+                    finishActivation(id, key);
+                });
+                return;
+            }
+            restoreOverlayAfterInput();
+            if (digits.length !== 8) {
+                activationBusy = false;
+                showActivationOverlay('Код должен состоять из 8 цифр.');
+                return;
+            }
+            try { Lampa.Noty.show('Проверяем код…'); } catch (e) {}
+            redeemCode(digits).then(function (res) {
+                if (!res.ok) {
                     activationBusy = false;
+                    showActivationOverlay(res.reason);
+                    return;
                 }
+                finishActivation(res.id, res.key);
+            }).catch(function () {
+                activationBusy = false;
+                showActivationOverlay('Не удалось связаться с сервером. Проверьте интернет.');
             });
         });
     }
@@ -1623,9 +1666,9 @@
                 '<div style="font-size:42px;font-weight:700;margin-bottom:18px">RMEDIAHUB</div>' +
                 '<div style="font-size:28px;margin-bottom:12px">Устройство не активировано</div>' +
                 '<div style="font-size:20px;opacity:.75;margin-bottom:10px">' +
-                    remoteEscape(message || 'Введите код доступа или свяжитесь с администратором.') + '</div>' +
+                    remoteEscape(message || 'Введите код активации из 8 цифр или свяжитесь с администратором.') + '</div>' +
                 '<div style="font-size:18px;margin-top:26px">' +
-                    '<a class="rmedia-activate selector" tabindex="0" role="button" style="cursor:pointer;' + btn + '">Ввести код доступа</a>' +
+                    '<a class="rmedia-activate selector" tabindex="0" role="button" style="cursor:pointer;' + btn + '">Ввести код активации</a>' +
                     '<a class="rmedia-contact selector" tabindex="0" href="' + remoteEscape(contact) + '" target="_blank" rel="noopener noreferrer" style="' + btn + '">Связаться с администратором</a>' +
                     '<div style="margin-top:12px;overflow-wrap:anywhere">' + remoteEscape(contact.replace(/^https?:\/\//, '')) + '</div>' +
                 '</div>' +
