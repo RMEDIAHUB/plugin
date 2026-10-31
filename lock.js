@@ -744,11 +744,7 @@
         clientMenuRegistered = true;
     }
 
-    let rmServerSpeedTest = false;
     function runServerSpeedTest() {
-        // Тест скорости открывает экран TorrServer без PIN — это разрешено.
-        rmServerSpeedTest = true;
-        setTimeout(function () { rmServerSpeedTest = false; }, 5000);
         let complete = false;
         const attempt = function () {
             if (complete) return false;
@@ -1533,17 +1529,29 @@
         } catch (e) { return []; }
     }
 
-    function rmLoadTsPlugin(url) {
-        if (!/^http:\/\/[a-z0-9.-]+(:\d{1,5})?\/p$/.test(url || '')) return;
-        if (rmTsLoaded === url) return;
-        // У клиентов со старой настройкой TS уже стоит в расширениях — не дублируем.
-        if (rmLampaPluginUrls().indexOf(url) >= 0) { rmTsLoaded = url; return; }
-        if (rmTsLoaded) return; // другой TS уже загружен — новый применится при следующем запуске
-        rmTsLoaded = url;
-        const s = document.createElement('script');
-        s.src = url;
-        s.onerror = function () { console.warn('[RMEDIA] TS plugin load failed', url); };
-        document.head.appendChild(s);
+    // TS из админки кладём в «Расширения» Лампы (как при ручной настройке),
+    // чтобы у клиента было меню TSArea (сервер, Flash). prevUrl — прошлый TS
+    // из админки: если сервер сменили, старый убираем. Чужие расширения не трогаем.
+    function rmEnsureTsExtension(url, prevUrl) {
+        const valid = /^http:\/\/[a-z0-9.-]+(:\d{1,5})?\/p$/;
+        if (url && !valid.test(url)) return;
+        try {
+            let have = false;
+            Lampa.Plugins.get().forEach(function (p) {
+                const u = String(p && p.url || '');
+                if (url && u === url) { have = true; return; }
+                if (prevUrl && u === prevUrl && valid.test(prevUrl)) Lampa.Plugins.remove(p);
+            });
+            if (url && !have) Lampa.Plugins.add({ url: url, status: 1, name: 'TSArea' });
+            if (url) rmTsLoaded = url;
+        } catch (e) {
+            // Нет API расширений (старая Лампа) — просто подгружаем скрипт.
+            if (!url || rmTsLoaded === url || rmLampaPluginUrls().indexOf(url) >= 0) return;
+            rmTsLoaded = url;
+            const s = document.createElement('script');
+            s.src = url;
+            document.head.appendChild(s);
+        }
     }
 
     function rmApplySharedKey(service, v) {
@@ -1556,10 +1564,11 @@
         console.log('[RMEDIA] ' + service + ' binding updated');
     }
 
-    // Адрес TorrServer клиента = адрес TS-плагина без «/p».
+    // Адрес TorrServer клиента = адрес TS-плагина без «http://» и «/p»
+    // (как при ручной настройке: v29poyj51.tsarea.tv:8880).
     // Пишем в «Основную ссылку» Лампы, только если он ещё не такой.
     function rmApplyTorrServer(tsPlugin) {
-        const m = /^(http:\/\/[a-z0-9.-]+(:\d{1,5})?)\/p$/.exec(tsPlugin || '');
+        const m = /^http:\/\/([a-z0-9.-]+(:\d{1,5})?)\/p$/.exec(tsPlugin || '');
         if (!m) return;
         const url = m[1];
         try {
@@ -1588,8 +1597,9 @@
             if (cfg.filmix) rmApplySharedKey('filmix', cfg.filmix);
             if (cfg.kinopub) rmApplySharedKey('kinopub', cfg.kinopub);
             if (typeof cfg.ts_plugin === 'string') {
+                const prev = remoteClean(remoteGet(RM_TS_KEY, ''));
+                if (prev !== cfg.ts_plugin || !rmTsLoaded) rmEnsureTsExtension(cfg.ts_plugin, prev !== cfg.ts_plugin ? prev : '');
                 remoteSet(RM_TS_KEY, cfg.ts_plugin);
-                rmLoadTsPlugin(cfg.ts_plugin);
                 rmApplyTorrServer(cfg.ts_plugin);
             }
         } catch (e) { console.warn('[RMEDIA] config apply failed', e); }
@@ -2014,23 +2024,7 @@
         // TS-плагин клиента из админки — при каждом запуске.
         try {
             const ts = remoteClean(remoteGet(RM_TS_KEY, ''));
-            if (ts) { rmLoadTsPlugin(ts); rmApplyTorrServer(ts); }
-        } catch(e) {}
-        // Экран TorrServer открывается и из списка торрентов, в обход меню
-        // настроек. Без PIN клиенту его не показываем.
-        try {
-            Lampa.Settings.listener.follow('open', function (e) {
-                if (!e || e.name !== 'server') return;
-                if (!isEnabled() || unlocked || authorizedSettingsSession || rmServerSpeedTest) return;
-                try { if (e.body && e.body.empty) e.body.empty(); } catch (x) {}
-                closeSettingsToContent();
-                setTimeout(function () {
-                    askMenuPin(function () {
-                        authorizedSettingsSession = true;
-                        openProtectedComponent('server');
-                    });
-                }, 120);
-            });
+            if (ts) { rmEnsureTsExtension(ts, ''); rmApplyTorrServer(ts); }
         } catch(e) {}
         try {
             const cached = JSON.parse(remoteGet(REMOTE_CACHE_KEY, 'null'));
