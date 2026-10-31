@@ -15,7 +15,7 @@
         'https://rmediahub.github.io/plugin/autoparser.js',
 
         // --- Чужие ---
-        // 'http://si.skaz.tv/s.js', // не работает на https-сайте (у skaz нет https)
+        'http://si.skaz.tv/s.js', // работает на http://rmediahub.cc (на https-копии GitHub — нет)
         'https://app.bwa.ad/online.js',
         'https://bwa.ad/re',
         'https://levende.github.io/lampa-plugins/tmdb-networks.js',
