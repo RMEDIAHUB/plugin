@@ -3,7 +3,7 @@
 
     if (window.rmedia_lock_test48_ready) return;
     window.rmedia_lock_test48_ready = true;
-    window.rmedia_lock_ui_version = '2026-10-31-pin2-codes';
+    window.rmedia_lock_ui_version = '2026-10-31-pin2-codes-hb';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -1569,18 +1569,30 @@
         focusRemoteOverlay();
     }
 
-    async function redeemCode(code) {
-        const r = await fetch(remoteApi() + '/v1/client/redeem', {
+    async function activateByCode(code) {
+        // Код проверяется через тот же адрес, что и обычная проверка доступа:
+        // Cloudflare пропускает с сайтов Lampa только его.
+        const device = detectDeviceInfo();
+        const r = await fetch(remoteApi() + '/v1/client/heartbeat?_=' + Date.now(), {
             method: 'POST',
             cache: 'no-store',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ code: code })
+            body: JSON.stringify({
+                code: code,
+                install_id: device.install_id,
+                device_name: device.device_name,
+                platform: device.platform,
+                user_agent: device.user_agent
+            })
         });
         if (r.status === 429) return { ok: false, reason: 'Слишком много попыток. Повторите через час.' };
-        if (!r.ok) return { ok: false, reason: 'Неверный или просроченный код. Попросите новый у администратора.' };
+        if (r.status === 404) return { ok: false, reason: 'Неверный или просроченный код. Попросите новый у администратора.' };
+        if (!r.ok) return { ok: false, reason: 'Сервер недоступен (HTTP ' + r.status + '). Повторите позже.' };
         const data = await r.json();
-        if (!data || !data.id || !data.key) return { ok: false, reason: 'Некорректный ответ сервера' };
-        return { ok: true, id: String(data.id), key: String(data.key) };
+        if (!data || !data.id || !data.status) return { ok: false, reason: 'Некорректный ответ сервера' };
+        if (data.device_allowed === false) return { ok: false, reason: data.message || 'Достигнут лимит устройств. Обратитесь к администратору.' };
+        if (!data.client_key) return { ok: false, reason: 'Сервер не подтвердил код. Обновите плагин.' };
+        return { ok: true, data: data };
     }
 
     async function finishActivation(id, key) {
@@ -1628,13 +1640,18 @@
                 return;
             }
             try { Lampa.Noty.show('Проверяем код…'); } catch (e) {}
-            redeemCode(digits).then(function (res) {
+            activateByCode(digits).then(function (res) {
+                activationBusy = false;
                 if (!res.ok) {
-                    activationBusy = false;
                     showActivationOverlay(res.reason);
                     return;
                 }
-                finishActivation(res.id, res.key);
+                const data = res.data;
+                remoteSet(REMOTE_ID_KEY, String(data.id));
+                remoteSet(REMOTE_KEY_KEY, String(data.client_key));
+                delete data.client_key;
+                applyRemoteStatus(data);
+                try { Lampa.Noty.show('Устройство активировано'); } catch (e) {}
             }).catch(function () {
                 activationBusy = false;
                 showActivationOverlay('Не удалось связаться с сервером. Проверьте интернет.');
