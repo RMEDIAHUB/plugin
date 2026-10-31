@@ -9,3 +9,4 @@ Lampa распространяется по лицензии GNU GPL v2 (фай�
 - встроенные плагины: plugins/modification.js
 - app.min.js: отключена встроенная загрузка плагина Shots (cub.best/plugin/shots).
   При обновлении Лампы с GitHub автора это правку нужно повторить.
+- app.min.js: отключена встроенная загрузка плагина Спорт (cub.best/plugin/sport).

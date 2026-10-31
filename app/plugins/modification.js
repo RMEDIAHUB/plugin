@@ -21,7 +21,7 @@
         'https://levende.github.io/lampa-plugins/tmdb-networks.js',
         'https://lampaplugins.github.io/store/store.js',
         'https://lampaplugins.github.io/store/p.js',
-        'https://lampame.github.io/main/cts.js',
+        // 'https://lampame.github.io/main/cts.js', // Concert Search — убран по просьбе
         'https://lampame.github.io/td/infuseSave.js',
         'https://nb557.github.io/plugins/reset_subs.js',
 
@@ -58,4 +58,43 @@
         };
         document.head.appendChild(script);
     });
+
+    // --- Настройки RMediaHub по умолчанию (один раз на устройство, дальше клиент меняет сам) ---
+    try {
+        if (!localStorage.getItem('rmedia_defaults_v1')) {
+            Lampa.Storage.set('torrserver_preload', false); // буфер пред.загрузки TorrServer — выкл
+            localStorage.setItem('rmedia_defaults_v1', '1');
+        }
+    } catch (e) {}
+
+    // --- Лишние пункты левого меню (их добавляют чужие плагины) — прячем ---
+    var HIDE_MENU = ['concert search', 'мультфильмы (cub)', 'xsena.red', 'спорт', 'sport'];
+
+    function hideMenuItems() {
+        try {
+            var items = document.querySelectorAll('.menu__item');
+            for (var i = 0; i < items.length; i++) {
+                var t = items[i].querySelector('.menu__text');
+                var text = (t ? t.textContent : items[i].textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                if (HIDE_MENU.indexOf(text) >= 0) items[i].style.display = 'none';
+            }
+        } catch (e) {}
+    }
+
+    hideMenuItems();
+    setInterval(hideMenuItems, 2000);
+    var menuWatched = false;
+    function watchMenu() {
+        var menu = document.querySelector('.menu');
+        if (!menu || menuWatched || !window.MutationObserver) return;
+        menuWatched = true;
+        var pending = false;
+        new MutationObserver(function () {
+            if (pending) return;
+            pending = true;
+            setTimeout(function () { pending = false; hideMenuItems(); }, 50);
+        }).observe(menu, { childList: true, subtree: true });
+    }
+    watchMenu();
+    setTimeout(watchMenu, 3000);
 })();
