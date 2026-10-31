@@ -744,7 +744,11 @@
         clientMenuRegistered = true;
     }
 
+    let rmServerSpeedTest = false;
     function runServerSpeedTest() {
+        // Тест скорости открывает экран TorrServer без PIN — это разрешено.
+        rmServerSpeedTest = true;
+        setTimeout(function () { rmServerSpeedTest = false; }, 5000);
         let complete = false;
         const attempt = function () {
             if (complete) return false;
@@ -1552,6 +1556,18 @@
         console.log('[RMEDIA] ' + service + ' binding updated');
     }
 
+    // Адрес TorrServer клиента = адрес TS-плагина без «/p».
+    // Пишем в «Основную ссылку» Лампы, только если он ещё не такой.
+    function rmApplyTorrServer(tsPlugin) {
+        const m = /^(http:\/\/[a-z0-9.-]+(:\d{1,5})?)\/p$/.exec(tsPlugin || '');
+        if (!m) return;
+        const url = m[1];
+        try {
+            if (String(Lampa.Storage.get('torrserver_url', '')) !== url) Lampa.Storage.set('torrserver_url', url);
+            if (String(Lampa.Storage.get('torrserver_use_link', 'one')) !== 'one') Lampa.Storage.set('torrserver_use_link', 'one');
+        } catch (e) {}
+    }
+
     function rmMoveTo(appUrl) {
         if (rmMoving || !/^http:\/\/[a-z0-9.-]+(:\d{1,5})?\/$/.test(appUrl || '')) return;
         if (location.protocol + '//' + location.host + '/' === appUrl) return; // уже там
@@ -1574,6 +1590,7 @@
             if (typeof cfg.ts_plugin === 'string') {
                 remoteSet(RM_TS_KEY, cfg.ts_plugin);
                 rmLoadTsPlugin(cfg.ts_plugin);
+                rmApplyTorrServer(cfg.ts_plugin);
             }
         } catch (e) { console.warn('[RMEDIA] config apply failed', e); }
     }
@@ -1997,7 +2014,23 @@
         // TS-плагин клиента из админки — при каждом запуске.
         try {
             const ts = remoteClean(remoteGet(RM_TS_KEY, ''));
-            if (ts) rmLoadTsPlugin(ts);
+            if (ts) { rmLoadTsPlugin(ts); rmApplyTorrServer(ts); }
+        } catch(e) {}
+        // Экран TorrServer открывается и из списка торрентов, в обход меню
+        // настроек. Без PIN клиенту его не показываем.
+        try {
+            Lampa.Settings.listener.follow('open', function (e) {
+                if (!e || e.name !== 'server') return;
+                if (!isEnabled() || unlocked || authorizedSettingsSession || rmServerSpeedTest) return;
+                try { if (e.body && e.body.empty) e.body.empty(); } catch (x) {}
+                closeSettingsToContent();
+                setTimeout(function () {
+                    askMenuPin(function () {
+                        authorizedSettingsSession = true;
+                        openProtectedComponent('server');
+                    });
+                }, 120);
+            });
         } catch(e) {}
         try {
             const cached = JSON.parse(remoteGet(REMOTE_CACHE_KEY, 'null'));
