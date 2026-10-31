@@ -55,7 +55,12 @@
         'https://and7ey.github.io/lampa/head_filter.js',
         'https://lampa.qzz.io/',
         'https://lampame.github.io/main/cw.js',
-        'https://cub.red/plugin/iptv'
+        'https://cub.red/plugin/iptv',
+        // --- добавлены 31.10 ---
+        'https://uakino.ax/lampa.js',                               // UAKino — фильмы и сериалы на украинском
+        'https://nb557.github.io/plugins/rating.js',                // рейтинги Кинопоиска и IMDb на карточках
+        'https://levende.github.io/lampa-plugins/tmdb-networks.js', // подборки по студиям и стримингам
+        'https://cub.red/plugin/interface'                          // новый красивый интерфейс от CUB
     ];
 
     var IS_BASIC = false;
@@ -68,14 +73,23 @@
         try { return (Lampa.Storage.get('plugins', '[]') || []).filter(function (p) { return p && p.url; }); } catch (e) { return []; }
     }
 
+    // Какие плагины мы уже ставили этому устройству в BASIC (чтобы удалённые клиентом не возвращать).
+    var ADDED_KEY = 'rmedia_basic_added';
+    var added = [];
+    try { added = JSON.parse(localStorage.getItem(ADDED_KEY) || '[]') || []; } catch (e) { added = []; }
+    // Устройства со старой меткой: тогда ставился первый набор (16 шт.).
+    if (!added.length && localStorage.getItem(BASIC_MARK)) added = BASIC_PLUGINS.slice(0, 17);
+    function saveAdded() { try { localStorage.setItem(ADDED_KEY, JSON.stringify(added)); localStorage.setItem(BASIC_MARK, '1'); } catch (e) {} }
+
     // Переход BASIC -> ULTIMATE: убираем из «Расширений» то, что ставили для BASIC.
     if (!IS_BASIC) {
         try {
-            if (localStorage.getItem(BASIC_MARK) && Lampa.Plugins && Lampa.Plugins.remove) {
+            if ((added.length || localStorage.getItem(BASIC_MARK)) && Lampa.Plugins && Lampa.Plugins.remove) {
                 Lampa.Plugins.get().forEach(function (p) {
-                    if (p && BASIC_PLUGINS.indexOf(p.url) >= 0 && p.url !== LOCK_URL) Lampa.Plugins.remove(p);
+                    if (p && p.url !== LOCK_URL && (added.indexOf(p.url) >= 0 || BASIC_PLUGINS.indexOf(p.url) >= 0)) Lampa.Plugins.remove(p);
                 });
                 localStorage.removeItem(BASIC_MARK);
+                localStorage.removeItem(ADDED_KEY);
             }
         } catch (e) {}
     }
@@ -102,15 +116,16 @@
         if (installed.indexOf(LOCK_URL) < 0) inject(LOCK_URL);
         var canAdd = false;
         try { canAdd = !!(Lampa.Plugins && Lampa.Plugins.add); } catch (e) {}
-        var first = !localStorage.getItem(BASIC_MARK);
+        var changed = false;
         BASIC_PLUGINS.forEach(function (url) {
             if (url === LOCK_URL || installed.indexOf(url) >= 0) return;
-            if (first && canAdd) {
-                try { Lampa.Plugins.add({ url: url, status: 1 }); return; } catch (e) {}
+            if (added.indexOf(url) >= 0) return; // уже ставили, клиент сам удалил — не навязываем
+            if (canAdd) {
+                try { Lampa.Plugins.add({ url: url, status: 1 }); added.push(url); changed = true; return; } catch (e) {}
             }
-            if (first || !canAdd) inject(url);
+            inject(url);
         });
-        if (first && canAdd) { try { localStorage.setItem(BASIC_MARK, '1'); } catch (e) {} }
+        if (changed) saveAdded();
     } else {
         RMEDIA_PLUGINS.forEach(function (url) {
             if (installed.indexOf(url) >= 0) return;
