@@ -67,8 +67,22 @@
         }
     } catch (e) {}
 
+    // --- Всегда стартовать с «Главной» ---
+    // IPTV-плагин при открытии сам ставит «Стартовая страница: Последняя».
+    // Возвращаем «Главную» при каждом запуске и при сворачивании/закрытии.
+    function startFromMain() {
+        try { if (Lampa.Storage.get('start_page', 'main') !== 'main') Lampa.Storage.set('start_page', 'main'); } catch (e) {}
+    }
+    startFromMain();
+    try {
+        window.addEventListener('beforeunload', startFromMain);
+        document.addEventListener('visibilitychange', function () { if (document.hidden) startFromMain(); });
+        setInterval(startFromMain, 30000);
+    } catch (e) {}
+
     // --- Лишние пункты левого меню (их добавляют чужие плагины) — прячем ---
-    var HIDE_MENU = ['concert search', 'мультфильмы (cub)', 'xsena.red', 'спорт', 'sport'];
+    var HIDE_MENU = ['concert search', 'мультфильмы (cub)', 'xsena.red', 'спорт', 'sport',
+                     'подписки', 'расписание', 'торренты'];
 
     function hideMenuItems() {
         try {
