@@ -1720,11 +1720,11 @@
                 '<div style="font-size:42px;font-weight:700;margin-bottom:18px">RMEDIAHUB</div>' +
                 '<div style="font-size:28px;margin-bottom:12px">Устройство не активировано</div>' +
                 '<div style="font-size:20px;opacity:.75;margin-bottom:10px">' +
-                    remoteEscape(message || 'Введите код активации из 8 цифр или свяжитесь с администратором.') + '</div>' +
+                    remoteEscape(message || 'Введите код активации из 8 цифр.') + '</div>' +
                 '<div style="font-size:18px;margin-top:26px">' +
                     '<a class="rmedia-activate selector" tabindex="0" role="button" style="cursor:pointer;' + btn + '">Ввести код активации</a>' +
-                    '<a class="rmedia-contact selector" tabindex="0" href="' + remoteEscape(contact) + '" target="_blank" rel="noopener noreferrer" style="' + btn + '">Связаться с администратором</a>' +
-                    '<div style="margin-top:12px;overflow-wrap:anywhere">' + remoteEscape(contact.replace(/^https?:\/\//, '')) + '</div>' +
+                    '<div style="margin-top:22px;font-size:20px;opacity:.75">Нет кода? Свяжитесь с администратором:</div>' +
+                    '<div style="margin-top:6px;font-size:22px;overflow-wrap:anywhere">' + remoteEscape(contact.replace(/^https?:\/\//, '')) + '</div>' +
                 '</div>' +
             '</div>'
         );
@@ -1732,9 +1732,6 @@
             if (e && e.preventDefault) e.preventDefault();
             if (e && e.stopPropagation) e.stopPropagation();
             setTimeout(startActivation, 0);
-        });
-        remoteOverlay.find('.rmedia-contact').on('hover:enter.rmedia-contact', function () {
-            if (this.click) this.click();
         });
         focusRemoteOverlay();
     }
