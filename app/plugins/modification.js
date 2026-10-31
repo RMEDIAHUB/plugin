@@ -60,21 +60,32 @@
 
     var IS_BASIC = false;
     try { IS_BASIC = localStorage.getItem('rmedia_tariff') === 'basic'; } catch (e) {}
-    if (IS_BASIC) RMEDIA_PLUGINS = BASIC_PLUGINS;
 
-    // Что уже стоит у клиента вручную (чтобы не загрузить дважды)
-    var installed = [];
-    try {
-        installed = (Lampa.Storage.get('plugins', '[]') || []).map(function (p) {
-            return p && p.url;
-        });
-    } catch (e) {}
+    var LOCK_URL = 'https://rmediahub.github.io/plugin/lock.js';
+    var BASIC_MARK = 'rmedia_basic_plugins_v1';
+
+    function lampaList() {
+        try { return (Lampa.Storage.get('plugins', '[]') || []).filter(function (p) { return p && p.url; }); } catch (e) { return []; }
+    }
+
+    // Переход BASIC -> ULTIMATE: убираем из «Расширений» то, что ставили для BASIC.
+    if (!IS_BASIC) {
+        try {
+            if (localStorage.getItem(BASIC_MARK) && Lampa.Plugins && Lampa.Plugins.remove) {
+                Lampa.Plugins.get().forEach(function (p) {
+                    if (p && BASIC_PLUGINS.indexOf(p.url) >= 0 && p.url !== LOCK_URL) Lampa.Plugins.remove(p);
+                });
+                localStorage.removeItem(BASIC_MARK);
+            }
+        } catch (e) {}
+    }
+
+    // Что уже стоит у клиента в «Расширениях» (чтобы не загрузить дважды)
+    var installed = lampaList().map(function (p) { return p.url; });
 
     var stamp = Math.floor(Date.now() / 9e5); // обновление раз в 15 минут
 
-    RMEDIA_PLUGINS.forEach(function (url) {
-        if (installed.indexOf(url) >= 0) return;
-
+    function inject(url) {
         var script = document.createElement('script');
         script.type = 'text/javascript';
         script.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'v=' + stamp;
@@ -82,7 +93,30 @@
             console.log('RMedia', 'не удалось загрузить плагин', url);
         };
         document.head.appendChild(script);
-    });
+    }
+
+    if (IS_BASIC) {
+        // BASIC: ничего не прячем — все плагины видны клиенту в «Расширениях».
+        // Ставим их туда один раз на устройство; дальше клиент сам включает/удаляет,
+        // а Лампа загружает их сама. lock.js (код активации) грузим отдельно.
+        if (installed.indexOf(LOCK_URL) < 0) inject(LOCK_URL);
+        var canAdd = false;
+        try { canAdd = !!(Lampa.Plugins && Lampa.Plugins.add); } catch (e) {}
+        var first = !localStorage.getItem(BASIC_MARK);
+        BASIC_PLUGINS.forEach(function (url) {
+            if (url === LOCK_URL || installed.indexOf(url) >= 0) return;
+            if (first && canAdd) {
+                try { Lampa.Plugins.add({ url: url, status: 1 }); return; } catch (e) {}
+            }
+            if (first || !canAdd) inject(url);
+        });
+        if (first && canAdd) { try { localStorage.setItem(BASIC_MARK, '1'); } catch (e) {} }
+    } else {
+        RMEDIA_PLUGINS.forEach(function (url) {
+            if (installed.indexOf(url) >= 0) return;
+            inject(url);
+        });
+    }
 
     // --- Настройки RMediaHub по умолчанию (один раз на устройство, дальше клиент меняет сам) ---
     try {
