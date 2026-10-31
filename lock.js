@@ -514,7 +514,7 @@
     }
 
     function settingsSessionAllowed() {
-        return unlocked || safeSyncOpening ||
+        return unlocked || safeSyncOpening || rmPlayerOpening ||
             (authorizedSettingsSession && $('body').hasClass('settings--open'));
     }
 
@@ -569,6 +569,7 @@
                 return;
             }
             if (!unlocked && !(safeSyncOpening && String(component) === 'account') &&
+                !(rmPlayerOpening && String(component) === 'player') &&
                 !authorizedSettingsSession) {
                 askMenuPin(open);
                 return;
@@ -882,6 +883,7 @@
 
     function closeSettingsToContent() {
         safeSyncOpening = false;
+        rmPlayerOpening = false;
         safeSyncAccountReached = false;
         const settingsWasOpen = authorizedSettingsSession;
         authorizedSettingsSession = false;
@@ -1082,6 +1084,41 @@
 
         syncHeadAdded = true;
     }
+
+    // ===== Кнопка «Плеер»: клиент без PIN открывает ТОЛЬКО настройки плеера =====
+    // (выбрать/сбросить плеер на Android и Apple TV). Остальные настройки закрыты.
+    let rmPlayerOpening = false;
+    let rmPlayerHeadAdded = false;
+
+    function rmOpenPlayerSettings() {
+        rmPlayerOpening = true;
+        try {
+            Lampa.Controller.toggle('settings');
+            setTimeout(function () {
+                try { Lampa.Settings.create('player', { onBack: rmClosePlayerSettings }); }
+                catch (e) { rmClosePlayerSettings(); }
+            }, 80);
+        } catch (e) { rmClosePlayerSettings(); }
+    }
+
+    function rmClosePlayerSettings() {
+        rmPlayerOpening = false;
+        closeSettingsToContent();
+    }
+
+    function addClientPlayerHead() {
+        if (rmPlayerHeadAdded || !window.Lampa || !Lampa.Head || typeof Lampa.Head.addIcon !== 'function') return;
+        const icon =
+            '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm0 2v10h16V7H4Zm6 2.5 5 2.5-5 2.5v-5Z"/></svg>';
+        const item = Lampa.Head.addIcon(icon, rmOpenPlayerSettings);
+        if (item && item.attr) {
+            item.attr('data-rmedia-sync-head', '1'); // не прятать вместе с консолью
+            item.attr('data-rmedia-player-head', '1');
+            item.attr('title', 'Плеер');
+        }
+        rmPlayerHeadAdded = true;
+    }
+    // ===== /Плеер =====
 
     function bindTvAdminShortcut() {
         // v11.9: глобальный секрет по стрелкам отключён.
@@ -1577,6 +1614,26 @@
         } catch (e) {}
     }
 
+    // IPTV-плейлист клиента из админки → свой плейлист IPTV-плагина
+    // («Добавить новый плейлист»), работает без CUB. Трогаем только свою запись.
+    function rmApplyIptv(url) {
+        const ID = 'rmediahub';
+        let list = [];
+        try { list = Lampa.Storage.get('iptv_playlist_custom', '[]') || []; } catch (e) {}
+        if (!Array.isArray(list)) list = [];
+        let idx = -1;
+        list.forEach(function (p, i) { if (p && p.id === ID) idx = i; });
+        if (!url) {
+            if (idx >= 0) { list.splice(idx, 1); Lampa.Storage.set('iptv_playlist_custom', list); }
+            return;
+        }
+        if (url.length > 1000 || !/^https?:\/\/[^\s"'<>]+$/i.test(url)) return;
+        if (idx >= 0 && list[idx].url === url) return;
+        const item = { id: ID, custom: true, url: url, name: 'RMediaHub TV' };
+        if (idx >= 0) list[idx] = item; else list.push(item);
+        Lampa.Storage.set('iptv_playlist_custom', list);
+    }
+
     function rmMoveTo(appUrl) {
         if (rmMoving || !/^http:\/\/[a-z0-9.-]+(:\d{1,5})?\/$/.test(appUrl || '')) return;
         if (location.protocol + '//' + location.host + '/' === appUrl) return; // уже там
@@ -1602,6 +1659,7 @@
                 remoteSet(RM_TS_KEY, cfg.ts_plugin);
                 rmApplyTorrServer(cfg.ts_plugin);
             }
+            if (typeof cfg.iptv_playlist === 'string') rmApplyIptv(cfg.iptv_playlist);
         } catch (e) { console.warn('[RMEDIA] config apply failed', e); }
     }
     // ===== /RMEDIAHUB CONFIG =====
@@ -2217,6 +2275,7 @@
         initRemoteControl();
         addClientSyncMenu();
         addClientSyncHead();
+        addClientPlayerHead();
         bindTvAdminShortcut();
         watchSettings();
         hideRestrictedUI();
