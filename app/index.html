@@ -1,6 +1,24 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <script>
+        // RMediaHub: переезд из обычной Лампы. lock.js передаёт клиента во фрагменте
+        // адреса (#rmid=...&rmkey=...), он не уходит на сервер. Сохраняем и убираем из адреса.
+        (function () {
+            try {
+                var m = (location.hash || '').match(/rmid=([^&]+)&rmkey=([^&]+)/);
+                if (!m) return;
+                var id = decodeURIComponent(m[1]), key = decodeURIComponent(m[2]);
+                if (/^RM-[0-9A-F]{8}$/.test(id) && /^[A-Za-z0-9_-]{10,64}$/.test(key)) {
+                    localStorage.setItem('rmedia_remote_client_id', id);
+                    localStorage.setItem('rmedia_remote_client_key', key);
+                    // Не спрашивать язык после переезда.
+                    if (!localStorage.getItem('language')) localStorage.setItem('language', 'ru');
+                }
+                history.replaceState(null, '', location.pathname + location.search);
+            } catch (e) {}
+        })();
+    </script>
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>RMediaHub - Фильмы и сериалы</title>

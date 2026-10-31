@@ -1515,8 +1515,76 @@
         }
     }
 
+    // ===== RMEDIAHUB CONFIG: TS / Filmix / KinoPub / переезд =====
+    // Админка присылает config только активному клиенту. Пустой config ничего
+    // не меняет — клиенты, настроенные через CUB, остаются как были.
+    const RM_TS_KEY = 'rmedia_ts_plugin';
+    const RM_SHARED_KEYS = { filmix: 'rmediahub.filmix.shared.v1', kinopub: 'rmediahub.kinopub.shared.v1' };
+    let rmTsLoaded = '';
+    let rmMoving = false;
+
+    function rmLampaPluginUrls() {
+        try {
+            return (Lampa.Storage.get('plugins', '[]') || []).map(function (p) { return String(p && p.url || ''); });
+        } catch (e) { return []; }
+    }
+
+    function rmLoadTsPlugin(url) {
+        if (!/^http:\/\/[a-z0-9.-]+(:\d{1,5})?\/p$/.test(url || '')) return;
+        if (rmTsLoaded === url) return;
+        // У клиентов со старой настройкой TS уже стоит в расширениях — не дублируем.
+        if (rmLampaPluginUrls().indexOf(url) >= 0) { rmTsLoaded = url; return; }
+        if (rmTsLoaded) return; // другой TS уже загружен — новый применится при следующем запуске
+        rmTsLoaded = url;
+        const s = document.createElement('script');
+        s.src = url;
+        s.onerror = function () { console.warn('[RMEDIA] TS plugin load failed', url); };
+        document.head.appendChild(s);
+    }
+
+    function rmApplySharedKey(service, v) {
+        if (!v || !/^[a-f0-9]{64}$/.test(String(v.key || '')) || !/^https:\/\/[a-z0-9.-]+$/.test(String(v.origin || ''))) return;
+        const name = RM_SHARED_KEYS[service];
+        let cur = null;
+        try { cur = JSON.parse(localStorage.getItem(name) || 'null'); } catch (e) {}
+        if (cur && cur.version === 1 && cur.key === v.key && cur.origin === v.origin) return;
+        try { localStorage.setItem(name, JSON.stringify({ version: 1, origin: v.origin, key: v.key })); } catch (e) {}
+        console.log('[RMEDIA] ' + service + ' binding updated');
+    }
+
+    function rmMoveTo(appUrl) {
+        if (rmMoving || !/^http:\/\/[a-z0-9.-]+(:\d{1,5})?\/$/.test(appUrl || '')) return;
+        if (location.protocol + '//' + location.host + '/' === appUrl) return; // уже там
+        const id = remoteClientId(), key = remoteClientKey();
+        if (!id || !key) return;
+        rmMoving = true;
+        try { Lampa.Noty.show('Переходим в RMediaHub…'); } catch (e) {}
+        // Ключ клиента — во фрагменте (#), он не уходит на сервер и в логи.
+        setTimeout(function () {
+            window.location.href = appUrl + '#rmid=' + encodeURIComponent(id) + '&rmkey=' + encodeURIComponent(key);
+        }, 1500);
+    }
+
+    function applyRemoteConfig(cfg) {
+        if (!cfg || typeof cfg !== 'object') return;
+        try {
+            if (cfg.app_url) { rmMoveTo(cfg.app_url); if (rmMoving) return; }
+            if (cfg.filmix) rmApplySharedKey('filmix', cfg.filmix);
+            if (cfg.kinopub) rmApplySharedKey('kinopub', cfg.kinopub);
+            if (typeof cfg.ts_plugin === 'string') {
+                remoteSet(RM_TS_KEY, cfg.ts_plugin);
+                rmLoadTsPlugin(cfg.ts_plugin);
+            }
+        } catch (e) { console.warn('[RMEDIA] config apply failed', e); }
+    }
+    // ===== /RMEDIAHUB CONFIG =====
+
     function applyRemoteStatus(data) {
         if (!data || !data.status) return;
+        // config не храним в кеше статуса — применяем сразу.
+        const cfg = data.config;
+        delete data.config;
+        if (cfg && data.status === 'active' && data.device_allowed !== false) applyRemoteConfig(cfg);
         data._received_at = Date.now();
         data._scope = remoteScope();
         remoteData = data;
@@ -1854,6 +1922,46 @@
                 description: 'Уникальный ID этой установки. Создаётся автоматически.'
             }
         });
+
+        // Для администратора: ключ привязки Filmix/KinoPub → в админку, раздел «Аккаунты».
+        ['filmix', 'kinopub'].forEach(function (service) {
+            const title = service === 'filmix' ? 'Filmix' : 'KinoPub';
+            Lampa.SettingsApi.addParam({
+                component: 'rmedia_lock',
+                param: { name: 'rmedia_copy_key_' + service, type: 'button' },
+                field: {
+                    name: 'Скопировать ключ ' + title,
+                    description: 'Для админки → АККАУНТЫ. Сначала привяжите ' + title + ' в его плагине.'
+                },
+                onChange: function () { rmCopySharedKey(service, title); }
+            });
+        });
+    }
+
+    function rmCopyText(text) {
+        try {
+            const t = document.createElement('textarea');
+            t.value = text;
+            t.setAttribute('readonly', '');
+            t.style.cssText = 'position:fixed;left:-9999px;top:0';
+            document.body.appendChild(t);
+            t.select();
+            const ok = document.execCommand('copy');
+            t.remove();
+            return ok;
+        } catch (e) { return false; }
+    }
+
+    function rmCopySharedKey(service, title) {
+        let s = null;
+        try { s = JSON.parse(localStorage.getItem(RM_SHARED_KEYS[service]) || 'null'); } catch (e) {}
+        const key = s && /^[a-f0-9]{64}$/.test(String(s.key || '')) ? s.key : '';
+        if (!key) { try { Lampa.Noty.show(title + ': ключа нет. Сначала привяжите ' + title + ' в его плагине.', { time: 8000 }); } catch (e) {} return; }
+        const ok = rmCopyText(key);
+        try {
+            Lampa.Noty.show(ok ? title + ': ключ скопирован (' + key.slice(0, 6) + '…' + key.slice(-4) + '). Вставьте его в админке.'
+                               : title + ': не удалось скопировать. Ключ: ' + key, { time: 12000 });
+        } catch (e) {}
     }
 
     function initRemoteControl() {
@@ -1885,6 +1993,11 @@
                     if (remoteOverlay && !activationBusy && remoteOverlay.css('display') !== 'none') focusRemoteOverlay();
                 }, 0);
             });
+        } catch(e) {}
+        // TS-плагин клиента из админки — при каждом запуске.
+        try {
+            const ts = remoteClean(remoteGet(RM_TS_KEY, ''));
+            if (ts) rmLoadTsPlugin(ts);
         } catch(e) {}
         try {
             const cached = JSON.parse(remoteGet(REMOTE_CACHE_KEY, 'null'));
