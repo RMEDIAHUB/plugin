@@ -15,7 +15,7 @@
         'https://rmediahub.github.io/plugin/autoparser.js',
 
         // --- Чужие ---
-        'http://si.skaz.tv/s.js',
+        // 'http://si.skaz.tv/s.js', // не работает на https-сайте (у skaz нет https)
         'https://app.bwa.ad/online.js',
         'https://bwa.ad/re',
         'https://levende.github.io/lampa-plugins/tmdb-networks.js',
@@ -25,13 +25,13 @@
         'https://lampame.github.io/td/infuseSave.js',
         'https://nb557.github.io/plugins/reset_subs.js',
 
-        // --- От cub.red ---
-        'http://cub.red/plugin/iptv',
-        'http://cub.red/plugin/etor',
-        'http://cub.red/plugin/quality',
-        'http://cub.red/plugin/interface',
-        'http://cub.red/plugin/tracks',
-        'http://cub.red/plugin/tmdb-proxy'
+        // --- От CUB (cub.best, защищённый адрес) ---
+        'https://cub.best/plugin/iptv',
+        'https://cub.best/plugin/etor',
+        'https://cub.best/plugin/quality',
+        'https://cub.best/plugin/interface',
+        'https://cub.best/plugin/tracks',
+        'https://cub.best/plugin/tmdb-proxy'
 
         // Личный TS-сервер клиента сюда НЕ пишем —
         // он будет приходить из админки по коду активации.
