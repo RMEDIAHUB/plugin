@@ -37,6 +37,31 @@
         // он будет приходить из админки по коду активации.
     ];
 
+    // Набор тарифа BASIC (бесплатные плагины). Тариф приходит из админки.
+    var BASIC_PLUGINS = [
+        'https://rmediahub.github.io/plugin/lock.js', // активация по коду и настройки из админки (в BASIC ничего не прячет)
+        'http://cub.rip/plugin/etor',
+        'http://bwa.ad/rc',
+        'http://cub.rip/plugin/lgbt',
+        'https://app.bwa.ad/online.js',
+        'http://si.skaz.tv/s.js',
+        'https://rmediahub.github.io/plugin/studios.js',
+        'https://nb557.github.io/plugins/online_mod.js',
+        'https://rmediahub.github.io/plugin/autoparser.js',
+        'https://lampame.github.io/main/bo.js',
+        'https://aviamovie.github.io/surs.js',
+        'https://tvigl.github.io/plugins/Flixio.js',
+        'https://levende.github.io/lampa-plugins/custom-favs.js',
+        'https://and7ey.github.io/lampa/head_filter.js',
+        'https://lampa.qzz.io/',
+        'https://lampame.github.io/main/cw.js',
+        'https://cub.red/plugin/iptv'
+    ];
+
+    var IS_BASIC = false;
+    try { IS_BASIC = localStorage.getItem('rmedia_tariff') === 'basic'; } catch (e) {}
+    if (IS_BASIC) RMEDIA_PLUGINS = BASIC_PLUGINS;
+
     // Что уже стоит у клиента вручную (чтобы не загрузить дважды)
     var installed = [];
     try {
@@ -85,6 +110,7 @@
                      'подписки', 'расписание', 'торренты'];
 
     function hideMenuItems() {
+        if (IS_BASIC) return; // BASIC — ничего не прячем
         try {
             var items = document.querySelectorAll('.menu__item');
             for (var i = 0; i < items.length; i++) {

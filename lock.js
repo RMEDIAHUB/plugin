@@ -45,7 +45,14 @@
         }
     }
 
+    // Тариф BASIC (приходит из админки): Лампа открыта — без PIN и без скрытия.
+    // Закрыт только служебный раздел RMEDIA Lock.
+    function rmIsBasic() {
+        try { return localStorage.getItem('rmedia_tariff') === 'basic'; } catch (e) { return false; }
+    }
+
     function isEnabled() {
+        if (rmIsBasic()) return false;
         return String(storageGet(ENABLED_KEY, 'true')) !== 'false';
     }
 
@@ -514,7 +521,7 @@
     }
 
     function settingsSessionAllowed() {
-        return unlocked || safeSyncOpening || rmPlayerOpening ||
+        return unlocked || rmIsBasic() || safeSyncOpening || rmPlayerOpening ||
             (authorizedSettingsSession && $('body').hasClass('settings--open'));
     }
 
@@ -548,8 +555,9 @@
                 }).first();
             } catch (e) {}
             const kino = isKinoPubSettings(component, item);
-            const admin = kino || /^(plugins|rmedia_lock)$|filmix|pirat/i.test(String(component)) ||
-                isProtectedSettingsFolder(item);
+            const admin = rmIsBasic() ? String(component) === 'rmedia_lock' :
+                (kino || /^(plugins|rmedia_lock)$|filmix|pirat/i.test(String(component)) ||
+                isProtectedSettingsFolder(item));
             const open = function () {
                 authorizedSettingsSession = true;
                 // Returning from the PIN keyboard reattaches Main. Preserve
@@ -568,7 +576,7 @@
                     kino ? 'PIN KinoPub' : 'RMEDIA ADMIN PIN', open, 'admin');
                 return;
             }
-            if (!unlocked && !(safeSyncOpening && String(component) === 'account') &&
+            if (!unlocked && !rmIsBasic() && !(safeSyncOpening && String(component) === 'account') &&
                 !(rmPlayerOpening && String(component) === 'player') &&
                 !authorizedSettingsSession) {
                 askMenuPin(open);
@@ -629,7 +637,7 @@
             const original = Lampa.Extensions.show;
             const guarded = function () {
                 const context = this, args = arguments;
-                if (protectedComponentPermit === 'plugins') {
+                if (protectedComponentPermit === 'plugins' || rmIsBasic()) {
                     protectedComponentPermit = '';
                     return original.apply(context, args);
                 }
@@ -647,8 +655,8 @@
             const target = $(event.target);
             const folder = target.closest('.settings-folder');
             const component = folder.attr('data-component');
-            if (folder.length && component &&
-                (isProtectedSettingsFolder(folder) || component === 'plugins')) {
+            if (folder.length && component && (rmIsBasic() ? component === 'rmedia_lock' :
+                (isProtectedSettingsFolder(folder) || component === 'plugins'))) {
                 event.preventDefault();
                 event.stopImmediatePropagation();
                 const kino = isKinoPubSettings(component, folder);
@@ -1705,10 +1713,36 @@
     }
     // ===== /Вернуть обычную Лампу =====
 
+    // Тариф из админки: ultimate (по умолчанию) или basic. При смене тарифа
+    // меняется набор плагинов Лампы RMediaHub — один перезапуск.
+    function rmApplyTariff(t) {
+        t = t === 'basic' ? 'basic' : 'ultimate';
+        let prev = 'ultimate';
+        try { prev = localStorage.getItem('rmedia_tariff') || 'ultimate'; } catch (e) {}
+        if (prev === t) return;
+        try { localStorage.setItem('rmedia_tariff', t); } catch (e) { return; }
+        try { Lampa.Noty.show(t === 'basic' ? 'Тариф BASIC — применяем настройки…' : 'Тариф ULTIMATE — применяем настройки…'); } catch (e) {}
+        setTimeout(function () { window.location.reload(); }, 2500);
+    }
+
+    // Адреса TorrServer (основной и дополнительный) — для BASIC общий бесплатный сервер.
+    function rmApplyTorrServerPair(ts) {
+        if (!ts || typeof ts !== 'object') return;
+        const ok = /^[a-z0-9.-]+(:\d{1,5})?$/i;
+        try {
+            if (ts.main && ok.test(ts.main) && String(Lampa.Storage.get('torrserver_url', '')) !== ts.main) Lampa.Storage.set('torrserver_url', ts.main);
+            if (typeof ts.extra === 'string' && (ts.extra === '' || ok.test(ts.extra)) &&
+                String(Lampa.Storage.get('torrserver_url_two', '')) !== ts.extra) Lampa.Storage.set('torrserver_url_two', ts.extra);
+            if (ts.main && String(Lampa.Storage.get('torrserver_use_link', 'one')) !== 'one') Lampa.Storage.set('torrserver_use_link', 'one');
+        } catch (e) {}
+    }
+
     function applyRemoteConfig(cfg) {
         if (!cfg || typeof cfg !== 'object') return;
         try {
+            if (typeof cfg.tariff === 'string') rmApplyTariff(cfg.tariff);
             if (cfg.app_url) { rmMoveTo(cfg.app_url); if (rmMoving) return; }
+            if (cfg.torrserver) rmApplyTorrServerPair(cfg.torrserver);
             if (cfg.filmix) rmApplySharedKey('filmix', cfg.filmix);
             if (cfg.kinopub) rmApplySharedKey('kinopub', cfg.kinopub);
             if (typeof cfg.ts_plugin === 'string') {
@@ -2168,7 +2202,7 @@
     // ===== /RMEDIA REMOTE CONTROL v11 =====
 
     function hideClientHeadExtras() {
-        if (unlocked) return;
+        if (unlocked || rmIsBasic()) return;
 
         try {
             $('.open--profile, .open--console, .open--terminal, .head__action[data-action="console"], .head__action[data-action="terminal"]').hide();
