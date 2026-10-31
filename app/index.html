@@ -7,7 +7,13 @@
         (function () {
             try {
                 var m = (location.hash || '').match(/rmid=([^&]+)&rmkey=([^&]+)/);
+                // Отвязанное устройство («Вернуть обычную Лампу») — сразу на обычную Лампу.
+                if (!m && localStorage.getItem('rmedia_released') === '1') {
+                    location.replace('http://lampa.mx/');
+                    return;
+                }
                 if (!m) return;
+                localStorage.removeItem('rmedia_released');
                 var id = decodeURIComponent(m[1]), key = decodeURIComponent(m[2]);
                 if (/^RM-[0-9A-F]{8}$/.test(id) && /^[A-Za-z0-9_-]{10,64}$/.test(key)) {
                     localStorage.setItem('rmedia_remote_client_id', id);

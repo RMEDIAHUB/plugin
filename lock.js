@@ -1530,6 +1530,9 @@
                     : '') +
                 (creditVisible ? '<div class="rmedia-credit" style="font-size:20px;margin-top:20px">' +
                     '10€ теста можно зачесть в подписку.<br>Осталось: <span class="rmedia-credit-time"></span></div>' : '') +
+                (isTestExpired ? '<div style="font-size:18px;margin-top:26px">' +
+                    '<a class="rmedia-release selector" tabindex="0" role="button" ' +
+                    'style="display:inline-block;padding:14px 20px;border:2px solid #fff;border-radius:12px;color:#fff;font-weight:600;cursor:pointer">Вернуть обычную Лампу</a></div>' : '') +
                 '<div style="font-size:18px;opacity:.9;margin-top:26px">' +
                     '<a class="rmedia-contact selector" tabindex="0" href="' + remoteEscape(contact) + '" target="_blank" rel="noopener noreferrer" ' +
                     'style="display:inline-block;padding:14px 20px;border:2px solid #8ab4ff;border-radius:12px;color:#8ab4ff;font-weight:600;">Связаться с администратором</a>' +
@@ -1540,6 +1543,16 @@
           const button = remoteOverlay.find('.rmedia-contact');
           button.on('hover:enter.rmedia-contact', function () {
               if (this.click) this.click();
+          });
+          // «Вернуть обычную Лампу» — подтверждение вторым нажатием.
+          let releaseArmed = 0;
+          remoteOverlay.find('.rmedia-release').on('hover:enter.rmedia click.rmedia', function (e) {
+              if (e && e.preventDefault) e.preventDefault();
+              const el = $(this);
+              if (Date.now() - releaseArmed < 8000) { el.text('Возвращаем обычную Лампу…'); rmReleaseLampa(); return; }
+              releaseArmed = Date.now();
+              el.text('Нажмите ещё раз для подтверждения');
+              setTimeout(function () { if (Date.now() - releaseArmed >= 8000) el.text('Вернуть обычную Лампу'); }, 8100);
           });
           focusRemoteOverlay();
         }
@@ -1647,6 +1660,51 @@
         }, 1500);
     }
 
+    // ===== Вернуть обычную Лампу =====
+    // Убирает всё наше: Лок и наши расширения, ключи, плейлист, переезд.
+    // В обычной Лампе — перезапуск без Лока. В Лампе RMediaHub (rmediahub.cc)
+    // — пометка «отвязан» и переход на обычную lampa.mx (index.html потом
+    // при каждом запуске сразу отправляет туда же).
+    let rmReleasing = false;
+    function rmReleaseLampa() {
+        if (rmReleasing) return;
+        rmReleasing = true;
+        // CUB-аккаунт @rmediahub.app — это аккаунт администратора, из его облака
+        // приходят наши расширения. Выходим из него. Свой CUB клиента не трогаем.
+        try {
+            let email = '';
+            try { email = String((Lampa.Account.Permit.account || {}).email || ''); } catch (e) {}
+            if (!email) email = String(Lampa.Storage.get('account_email', '') || '');
+            if (/@rmediahub\.app$/i.test(email)) {
+                ['account', 'account_user', 'account_email', 'account_notice', 'account_bookmarks', 'account_plugins']
+                    .forEach(function (k) { Lampa.Storage.set(k, '', true); });
+                Lampa.Storage.set('account_use', false, true);
+            }
+        } catch (e) {}
+        // Чистая Лампа: все расширения ставились нами (настройка «под ключ»).
+        try { Lampa.Plugins.get().forEach(function (p) { Lampa.Plugins.remove(p); }); } catch (e) {}
+        try { Lampa.Storage.set('plugins', [], true); } catch (e) {}
+        try { rmApplyIptv(''); } catch (e) {}
+        try {
+            const drop = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (/^rmedia|^rmediahub\./.test(k)) drop.push(k);
+            }
+            drop.forEach(function (k) { localStorage.removeItem(k); });
+        } catch (e) {}
+        const onOurApp = /(^|\.)rmediahub\.cc$/i.test(location.hostname);
+        setTimeout(function () {
+            if (onOurApp) {
+                try { localStorage.setItem('rmedia_released', '1'); } catch (e) {}
+                window.location.href = 'http://lampa.mx/';
+            } else {
+                window.location.reload();
+            }
+        }, 800);
+    }
+    // ===== /Вернуть обычную Лампу =====
+
     function applyRemoteConfig(cfg) {
         if (!cfg || typeof cfg !== 'object') return;
         try {
@@ -1666,6 +1724,8 @@
 
     function applyRemoteStatus(data) {
         if (!data || !data.status) return;
+        // Администратор нажал «Отвязать» — возвращаем обычную Лампу.
+        if (data.release === true) { rmReleaseLampa(); return; }
         // config не храним в кеше статуса — применяем сразу.
         const cfg = data.config;
         delete data.config;
