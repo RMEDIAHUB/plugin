@@ -1833,9 +1833,76 @@
             showRemoteOverlay('blocked', 'Не удалось подтвердить статус доступа. Повторите позже.', data);
             return;
         }
-        if (data.status === 'active') removeRemoteOverlay();
+        if (data.status === 'active') { removeRemoteOverlay(); if (!data.test) rmExpiryReminder(data); }
         else showRemoteOverlay(data.status, data.message || '', data);
     }
+
+    // ===== Напоминание о конце подписки =====
+    // За 3 дня до окончания — окно по центру раз в день. Кнопка «OK» просто закрывает его.
+    const RM_EXPIRY_DAYS = 3;
+    let rmExpiryBox = null;
+    let rmExpiryPrevController = '';
+    function rmExpiryReminder(data) {
+        try {
+            if (rmExpiryBox || activationBusy || !data || !data.expires_at) return;
+            const end = Date.parse(data.expires_at);
+            if (!Number.isFinite(end)) return;
+            const left = end - remoteNow(data);
+            if (left <= 0 || left > RM_EXPIRY_DAYS * 864e5) return;
+            const today = new Date().toDateString();
+            const mark = today + '|' + data.expires_at;
+            if (localStorage.getItem('rmedia_expiry_notice') === mark) return;
+            localStorage.setItem('rmedia_expiry_notice', mark);
+
+            const d = new Date(end);
+            const pad = function (n) { return (n < 10 ? '0' : '') + n; };
+            const dateText = pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear();
+            const days = Math.ceil(left / 864e5);
+            const when = left < 864e5 ? 'заканчивается в течение суток' :
+                'заканчивается через ' + days + ' ' + (days === 1 ? 'день' : 'дня');
+            const contact = remoteContact(data).replace(/^https?:\/\//, '');
+
+            setTimeout(function () {
+                if (rmExpiryBox || remoteOverlay) return;
+                try { rmExpiryPrevController = (Lampa.Controller.enabled() || {}).name || 'content'; } catch (e) {}
+                rmExpiryBox = $('<div class="rmedia-remote-lock rmedia-expiry"></div>');
+                rmExpiryBox.css({ position: 'fixed', inset: '0', zIndex: '999998', background: 'rgba(5,8,15,.82)', color: '#fff',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px', textAlign: 'center' });
+                rmExpiryBox.html(
+                    '<div style="max-width:680px;background:#0d1424;border:2px solid #8ab4ff;border-radius:20px;padding:34px 40px">' +
+                        '<div style="font-size:36px;font-weight:700;margin-bottom:16px">RMEDIAHUB</div>' +
+                        '<div style="font-size:26px;margin-bottom:8px">Ваша подписка ' + remoteEscape(when) + '</div>' +
+                        '<div style="font-size:20px;opacity:.8;margin-bottom:18px">Доступ до ' + remoteEscape(dateText) + '</div>' +
+                        '<div style="font-size:20px;opacity:.85">Чтобы продлить, напишите администратору:</div>' +
+                        '<div style="font-size:24px;margin:6px 0 26px">' + remoteEscape(contact) + '</div>' +
+                        '<a class="rmedia-expiry-ok selector" tabindex="0" role="button" style="display:inline-block;padding:12px 48px;' +
+                            'border:2px solid #8ab4ff;border-radius:12px;color:#8ab4ff;font-weight:600;font-size:20px;cursor:pointer">OK</a>' +
+                    '</div>'
+                );
+                $('body').append(rmExpiryBox);
+                const close = function (e) {
+                    if (e && e.preventDefault) e.preventDefault();
+                    if (!rmExpiryBox) return;
+                    rmExpiryBox.remove();
+                    rmExpiryBox = null;
+                    try { Lampa.Controller.toggle(rmExpiryPrevController || 'content'); } catch (err) {}
+                };
+                rmExpiryBox.find('.rmedia-expiry-ok').on('hover:enter.rmedia click.rmedia', close);
+                try {
+                    Lampa.Controller.add('rmedia_expiry', {
+                        toggle: function () {
+                            if (!rmExpiryBox) return;
+                            Lampa.Controller.collectionSet(rmExpiryBox);
+                            Lampa.Controller.collectionFocus(rmExpiryBox.find('.rmedia-expiry-ok')[0], rmExpiryBox);
+                        },
+                        back: close, up: function () {}, down: function () {}, left: function () {}, right: function () {}
+                    });
+                    Lampa.Controller.toggle('rmedia_expiry');
+                } catch (e) {}
+            }, 4000);
+        } catch (e) {}
+    }
+    // ===== /Напоминание =====
 
     // ===== ACTIVATION (fail-closed) =====
     let activationBusy = false;

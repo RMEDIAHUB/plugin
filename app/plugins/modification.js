@@ -153,6 +153,16 @@
         }
     } catch (e) {}
 
+    // --- Shots (нарезки CUB) — выключаем: кнопка в карточке, в плеере, ряд на главной, раздел настроек ---
+    try {
+        ['shots_in_card', 'shots_in_player', 'content_rows_shots_main'].forEach(function (k) {
+            if (String(Lampa.Storage.get(k, 'true')) !== 'false') Lampa.Storage.set(k, 'false'); // строкой: так Лампа читает надёжно
+        });
+        var shotsCss = document.createElement('style');
+        shotsCss.textContent = '.settings-folder[data-component="shots"],.shots-view-button{display:none!important}';
+        document.head.appendChild(shotsCss);
+    } catch (e) {}
+
     // --- Всегда стартовать с «Главной» ---
     // IPTV-плагин при открытии сам ставит «Стартовая страница: Последняя».
     // Возвращаем «Главную» при каждом запуске и при сворачивании/закрытии.
@@ -167,7 +177,7 @@
     } catch (e) {}
 
     // --- Лишние пункты левого меню (их добавляют чужие плагины) — прячем ---
-    var HIDE_MENU = ['concert search', 'мультфильмы (cub)', 'xsena.red', 'спорт', 'sport',
+    var HIDE_MENU = ['shots', 'concert search', 'мультфильмы (cub)', 'xsena.red', 'спорт', 'sport',
                      'подписки', 'расписание', 'торренты'];
 
     function hideMenuItems() {
