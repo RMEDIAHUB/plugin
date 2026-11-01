@@ -109,7 +109,19 @@
         document.head.appendChild(script);
     }
 
-    if (IS_BASIC) {
+    // Устройство ещё не активировано — грузим только экран активации (lock.js).
+    // Остальные плагины ему пока не нужны, а слабым приставкам (Apple TV) так легче.
+    // После ввода кода lock.js перезапустит Лампу уже с полным набором.
+    var ACTIVATED = false;
+    try {
+        ACTIVATED = !!(localStorage.getItem('rmedia_remote_client_id') ||
+            String(Lampa.Storage.get('rmedia_remote_client_id', '') || ''));
+    } catch (e) { ACTIVATED = true; }
+
+    if (!ACTIVATED) {
+        try { localStorage.setItem('rmedia_light_start', '1'); } catch (e) {}
+        if (installed.indexOf(LOCK_URL) < 0) inject(LOCK_URL);
+    } else if (IS_BASIC) {
         // BASIC: ничего не прячем — все плагины видны клиенту в «Расширениях».
         // Ставим их туда один раз на устройство; дальше клиент сам включает/удаляет,
         // а Лампа загружает их сама. lock.js (код активации) грузим отдельно.

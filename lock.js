@@ -1664,6 +1664,8 @@
     function rmMoveTo(appUrl) {
         if (rmMoving || !/^http:\/\/[a-z0-9.-]+(:\d{1,5})?\/$/.test(appUrl || '')) return;
         if (location.protocol + '//' + location.host + '/' === appUrl) return; // уже там
+        // Приложение Лампы для Apple TV (TestFlight): переезд пока не делаем — остаёмся на текущем адресе.
+        if (/iPad; CPU iPhone OS/i.test(String(navigator.userAgent || ''))) return;
         const id = remoteClientId(), key = remoteClientKey();
         if (!id || !key) return;
         rmMoving = true;
@@ -1956,6 +1958,14 @@
                 delete data.client_key;
                 applyRemoteStatus(data);
                 try { Lampa.Noty.show('Устройство активировано'); } catch (e) {}
+                // Лампа RMediaHub до активации грузила только этот экран —
+                // перезапускаем, чтобы подтянулись все плагины.
+                try {
+                    if (localStorage.getItem('rmedia_light_start') === '1') {
+                        localStorage.removeItem('rmedia_light_start');
+                        setTimeout(function () { window.location.reload(); }, 2500);
+                    }
+                } catch (e) {}
             }).catch(function () {
                 activationBusy = false;
                 showActivationOverlay('Не удалось связаться с сервером. Проверьте интернет.');
