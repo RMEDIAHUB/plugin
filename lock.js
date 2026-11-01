@@ -1333,6 +1333,21 @@
         return CONTACT_FALLBACK;
     }
 
+    // Подсветка выбранной кнопки на наших экранах (пульт ТВ, мышь, клавиатура).
+    (function rmFocusStyle() {
+        try {
+            if (document.getElementById('rmedia-focus-style')) return;
+            const st = document.createElement('style');
+            st.id = 'rmedia-focus-style';
+            st.textContent =
+                '.rmedia-remote-lock .selector{transition:transform .12s,background .12s,color .12s;outline:none}' +
+                '.rmedia-remote-lock .selector.focus{' +
+                'background:#fff!important;color:#05080f!important;border-color:#fff!important;' +
+                'transform:scale(1.08);box-shadow:0 0 0 4px rgba(138,180,255,.55)}';
+            (document.head || document.documentElement).appendChild(st);
+        } catch (e) {}
+    })();
+
     function focusRemoteOverlay() {
         if (!remoteOverlay) return;
         try { Lampa.Controller.toggle('rmedia_remote_lock'); } catch(e) {}
