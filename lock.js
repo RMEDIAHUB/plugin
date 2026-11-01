@@ -1661,11 +1661,25 @@
         Lampa.Storage.set('iptv_playlist_custom', list);
     }
 
+    let rmBundleLoaded = false;
+    function rmLoadBundle(appUrl) {
+        if (rmBundleLoaded || window.rmedia_bundle_loaded) return;
+        rmBundleLoaded = true;
+        window.rmedia_bundle_loaded = true;
+        try {
+            const script = document.createElement('script');
+            script.src = appUrl + 'plugins/modification.js?v=' + Math.floor(Date.now() / 9e5);
+            document.head.appendChild(script);
+        } catch (e) {}
+    }
+
     function rmMoveTo(appUrl) {
         if (rmMoving || !/^http:\/\/[a-z0-9.-]+(:\d{1,5})?\/$/.test(appUrl || '')) return;
         if (location.protocol + '//' + location.host + '/' === appUrl) return; // уже там
-        // Приложение Лампы для Apple TV (TestFlight): переезд пока не делаем — остаёмся на текущем адресе.
-        if (/iPad; CPU iPhone OS/i.test(String(navigator.userAgent || ''))) return;
+        // Приложение Лампы для Apple TV (TestFlight): не переезжаем (после перезапуска
+        // оно зависает на чужом адресе), а подгружаем набор плагинов RMediaHub
+        // прямо в текущую Лампу — Filmix, KinoPub и остальное, как на rmediahub.cc.
+        if (/iPad; CPU iPhone OS/i.test(String(navigator.userAgent || ''))) { rmLoadBundle(appUrl); return; }
         const id = remoteClientId(), key = remoteClientKey();
         if (!id || !key) return;
         rmMoving = true;
