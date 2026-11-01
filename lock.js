@@ -1552,16 +1552,7 @@
           button.on('hover:enter.rmedia-contact', function () {
               if (this.click) this.click();
           });
-          // «Вернуть обычную Лампу» — подтверждение вторым нажатием.
-          let releaseArmed = 0;
-          remoteOverlay.find('.rmedia-release').on('hover:enter.rmedia click.rmedia', function (e) {
-              if (e && e.preventDefault) e.preventDefault();
-              const el = $(this);
-              if (Date.now() - releaseArmed < 8000) { el.text('Возвращаем обычную Лампу…'); rmReleaseLampa(); return; }
-              releaseArmed = Date.now();
-              el.text('Нажмите ещё раз для подтверждения');
-              setTimeout(function () { if (Date.now() - releaseArmed >= 8000) el.text('Вернуть обычную Лампу'); }, 8100);
-          });
+          rmBindReleaseButton(remoteOverlay);
           focusRemoteOverlay();
         }
         if (creditVisible) {
@@ -1674,6 +1665,20 @@
     // — пометка «отвязан» и переход на обычную lampa.mx (index.html потом
     // при каждом запуске сразу отправляет туда же).
     let rmReleasing = false;
+    // «Вернуть обычную Лампу» — подтверждение вторым нажатием (чтобы не нажали случайно).
+    function rmBindReleaseButton(root) {
+        let releaseArmed = 0;
+        root.find('.rmedia-release').on('hover:enter.rmedia click.rmedia', function (e) {
+            if (e && e.preventDefault) e.preventDefault();
+            if (e && e.stopPropagation) e.stopPropagation();
+            const el = $(this);
+            if (Date.now() - releaseArmed < 8000) { el.text('Возвращаем обычную Лампу…'); rmReleaseLampa(); return; }
+            releaseArmed = Date.now();
+            el.text('Нажмите ещё раз для подтверждения');
+            setTimeout(function () { if (Date.now() - releaseArmed >= 8000) el.text('Вернуть обычную Лампу'); }, 8100);
+        });
+    }
+
     function rmReleaseLampa() {
         if (rmReleasing) return;
         rmReleasing = true;
@@ -1972,9 +1977,14 @@
                     '<a class="rmedia-activate selector" tabindex="0" role="button" style="cursor:pointer;' + btn + '">Ввести код активации</a>' +
                     '<div style="margin-top:22px;font-size:20px;opacity:.75">Нет кода? Свяжитесь с администратором:</div>' +
                     '<div style="margin-top:6px;font-size:22px;overflow-wrap:anywhere">' + remoteEscape(contact.replace(/^https?:\/\//, '')) + '</div>' +
+                    '<div style="margin-top:34px">' +
+                        '<a class="rmedia-release selector" tabindex="0" role="button" ' +
+                        'style="display:inline-block;padding:10px 16px;border:2px solid rgba(255,255,255,.45);border-radius:12px;color:rgba(255,255,255,.8);font-size:17px;cursor:pointer">Вернуть обычную Лампу</a>' +
+                    '</div>' +
                 '</div>' +
             '</div>'
         );
+        rmBindReleaseButton(remoteOverlay);
         remoteOverlay.find('.rmedia-activate').on('hover:enter.rmedia click.rmedia', function (e) {
             if (e && e.preventDefault) e.preventDefault();
             if (e && e.stopPropagation) e.stopPropagation();
