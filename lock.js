@@ -1849,6 +1849,8 @@
             if (!Number.isFinite(end)) return;
             const left = end - remoteNow(data);
             if (left <= 0 || left > RM_EXPIRY_DAYS * 864e5) return;
+            // Во время просмотра не мешаем — покажем при следующей проверке, когда плеер закрыт.
+            try { if (Lampa.Player && typeof Lampa.Player.opened === 'function' && Lampa.Player.opened()) return; } catch (e) {}
             const today = new Date().toDateString();
             const mark = today + '|' + data.expires_at;
             if (localStorage.getItem('rmedia_expiry_notice') === mark) return;
@@ -1864,6 +1866,7 @@
 
             setTimeout(function () {
                 if (rmExpiryBox || remoteOverlay) return;
+                try { if (Lampa.Player && typeof Lampa.Player.opened === 'function' && Lampa.Player.opened()) { localStorage.removeItem('rmedia_expiry_notice'); return; } } catch (e) {}
                 try { rmExpiryPrevController = (Lampa.Controller.enabled() || {}).name || 'content'; } catch (e) {}
                 rmExpiryBox = $('<div class="rmedia-remote-lock rmedia-expiry"></div>');
                 rmExpiryBox.css({ position: 'fixed', inset: '0', zIndex: '999998', background: 'rgba(5,8,15,.82)', color: '#fff',
