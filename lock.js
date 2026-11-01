@@ -1439,6 +1439,10 @@
         } else if (/Android/i.test(ua)) {
             platform = 'Android';
             name = 'Android';
+        } else if (/iPad; CPU iPhone OS/i.test(ua)) {
+            // Приложение Лампы для Apple TV (TestFlight) представляется так.
+            platform = 'tvOS';
+            name = 'Apple TV';
         } else if (/iPad/i.test(ua) || (platformRaw === 'MacIntel' && navigator.maxTouchPoints > 1)) {
             platform = 'iPadOS';
             name = 'iPad';
