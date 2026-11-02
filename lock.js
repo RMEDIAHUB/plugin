@@ -1510,7 +1510,7 @@
             remoteOverlay = $('<div class="rmedia-remote-lock"></div>');
             remoteOverlay.css({
                 position: 'fixed',
-                inset: '0',
+                top: '0', left: '0', right: '0', bottom: '0', width: '100%', height: '100%',
                 zIndex: '999999',
                 background: '#090909',
                 color: '#fff',
@@ -1873,7 +1873,7 @@
                 try { if (Lampa.Player && typeof Lampa.Player.opened === 'function' && Lampa.Player.opened()) { localStorage.removeItem('rmedia_expiry_notice'); return; } } catch (e) {}
                 try { rmExpiryPrevController = (Lampa.Controller.enabled() || {}).name || 'content'; } catch (e) {}
                 rmExpiryBox = $('<div class="rmedia-remote-lock rmedia-expiry"></div>');
-                rmExpiryBox.css({ position: 'fixed', inset: '0', zIndex: '999998', background: 'rgba(5,8,15,.82)', color: '#fff',
+                rmExpiryBox.css({ position: 'fixed', top: '0', left: '0', right: '0', bottom: '0', width: '100%', height: '100%', zIndex: '999998', background: 'rgba(5,8,15,.82)', color: '#fff',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px', textAlign: 'center' });
                 rmExpiryBox.html(
                     '<div style="max-width:680px;background:#0d1424;border:2px solid #8ab4ff;border-radius:20px;padding:34px 40px">' +
@@ -2070,7 +2070,7 @@
             } catch(e) {}
             remoteOverlay = $('<div class="rmedia-remote-lock"></div>');
             remoteOverlay.css({
-                position: 'fixed', inset: '0', zIndex: '999999', background: '#090909', color: '#fff',
+                position: 'fixed', top: '0', left: '0', right: '0', bottom: '0', width: '100%', height: '100%', zIndex: '999999', background: '#090909', color: '#fff',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px', textAlign: 'center'
             });
             remoteOverlay.attr('role', 'dialog').attr('aria-modal', 'true');
