@@ -177,7 +177,7 @@
     } catch (e) {}
 
     // --- Лишние пункты левого меню (их добавляют чужие плагины) — прячем ---
-    var HIDE_MENU = ['shots', 'concert search', 'мультфильмы (cub)', 'xsena.red', 'спорт', 'sport',
+    var HIDE_MENU = ['shots', 'в качестве', 'concert search', 'мультфильмы (cub)', 'xsena.red', 'спорт', 'sport',
                      'подписки', 'расписание', 'торренты'];
 
     function hideMenuItems() {
