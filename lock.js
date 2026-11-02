@@ -3,6 +3,12 @@
 
     if (window.rmedia_lock_test48_ready) return;
     window.rmedia_lock_test48_ready = true;
+    // «Вернуть обычную Лампу» из Лампы RMediaHub: она открывает обычную Лампу
+    // с пометкой rmrelease=1 — тогда и здесь убираем всё наше, иначе старый код
+    // клиента в памяти обычной Лампы снова отправит его в RMediaHub.
+    let rmReleaseRequested = false;
+    try { rmReleaseRequested = /[?#&]rmrelease=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_req') === '1'; } catch (e) {}
+    try { if (rmReleaseRequested) sessionStorage.setItem('rmedia_release_req', '1'); } catch (e) {}
     window.rmedia_lock_ui_version = '2026-10-31-pin2-codes-hb-tvback';
 
     const PIN_KEY = 'rmedia_lock_pin';
@@ -1680,6 +1686,7 @@
     function rmMoveTo(appUrl) {
         if (rmMoving || !/^http:\/\/[a-z0-9.-]+(:\d{1,5})?\/$/.test(appUrl || '')) return;
         if (location.protocol + '//' + location.host + '/' === appUrl) return; // уже там
+        if (rmReleaseRequested) return;
         // Приложение Лампы для Apple TV (TestFlight): не переезжаем (после перезапуска
         // оно зависает на чужом адресе), а подгружаем набор плагинов RMediaHub
         // прямо в текущую Лампу — Filmix, KinoPub и остальное, как на rmediahub.cc.
@@ -1745,9 +1752,10 @@
         setTimeout(function () {
             if (onOurApp) {
                 try { localStorage.setItem('rmedia_released', '1'); } catch (e) {}
-                window.location.href = 'http://lampa.mx/';
+                window.location.href = 'http://lampa.mx/?rmrelease=1#rmrelease=1';
             } else {
-                window.location.reload();
+                try { sessionStorage.removeItem('rmedia_release_req'); } catch (e) {}
+                window.location.replace(location.protocol + '//' + location.host + location.pathname);
             }
         }, 800);
     }
@@ -2267,6 +2275,7 @@
     }
 
     function initRemoteControl() {
+        if (rmReleaseRequested) { rmReleaseLampa(); return; }
         addRemoteAdminSettings();
         try {
             Lampa.Controller.add('rmedia_remote_lock', {
