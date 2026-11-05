@@ -2631,7 +2631,14 @@
                 url: list[index].url,
                 position: index,
                 total: list.length,
-                onGetChannel: function (pos) { return toCh(list[pos] || list[0]); },
+                onGetChannel: function (pos) {
+                    const ch = toCh(list[pos] || list[0]);
+                    // Сообщаем плееру, что программа канала готова (иначе висит «Загрузка...»).
+                    setTimeout(function () {
+                        try { Lampa.Player.programReady({ channel: ch, position: 0, total: (ch.epg && ch.epg.length) || 1 }); } catch (e) {}
+                    }, 0);
+                    return ch;
+                },
                 onPlay: function (ch) { rmtvRemember(ch); },
                 onGetProgram: function (ch, pos, container) {
                     try { $(container).html(rmtvProgramHtml(ch)); } catch (e) {}
