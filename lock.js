@@ -2691,30 +2691,54 @@
             cScroll.append($('<div class="rmtv__msg selector">' + text + '</div>'));
         }
 
+        const RMTV_PAGE = 120;
+        let renderedCount = 0;
+        let channelsBody = null;
+
+        function channelEl(ch, i) {
+            const el = $('<div class="rmtv__ch selector">' +
+                '<div class="rmtv__num">' + (i + 1) + '</div>' +
+                '<div class="rmtv__logo"></div>' +
+                '<div class="rmtv__text"><div class="rmtv__name">' + rmtvEsc(ch.name) + '</div>' +
+                '<div class="rmtv__prog"></div></div></div>');
+            const info = rmtvNow(ch);
+            if (info && info.cur) el.find('.rmtv__prog').text(rmtvTime(info.cur[0]) + '  ' + info.cur[2]);
+            if (ch.logo) {
+                const img = document.createElement('img');
+                img.loading = 'lazy';
+                img.onerror = function () { img.remove(); };
+                img.src = ch.logo;
+                el.find('.rmtv__logo').append(img);
+            }
+            el.on('hover:focus', function () {
+                lastFocus = el[0];
+                cScroll.update(el, true);
+                // Длинные списки дорисовываем порциями, когда дошли почти до конца.
+                if (i >= renderedCount - 15) renderMore();
+            });
+            el.on('hover:enter', function () { rmtvPlay(shown, i); });
+            return el;
+        }
+
+        function renderMore() {
+            if (!channelsBody || renderedCount >= shown.length) return;
+            const first = renderedCount === 0;
+            const els = [];
+            const end = Math.min(shown.length, renderedCount + RMTV_PAGE);
+            for (let i = renderedCount; i < end; i++) els.push(channelEl(shown[i], i)[0]);
+            renderedCount = end;
+            channelsBody.append(els);
+            // Новые каналы добавляем в навигацию пульта, не сбивая текущий фокус.
+            if (!first) { try { Lampa.Controller.collectionAppend(els); } catch (e) {} }
+        }
+
         function showChannels(list) {
             shown = list;
+            renderedCount = 0;
             cScroll.clear();
-            const body = $('<div></div>');
-            list.forEach(function (ch, i) {
-                const el = $('<div class="rmtv__ch selector">' +
-                    '<div class="rmtv__num">' + (i + 1) + '</div>' +
-                    '<div class="rmtv__logo"></div>' +
-                    '<div class="rmtv__text"><div class="rmtv__name">' + rmtvEsc(ch.name) + '</div>' +
-                    '<div class="rmtv__prog"></div></div></div>');
-                const info = rmtvNow(ch);
-                if (info && info.cur) el.find('.rmtv__prog').text(rmtvTime(info.cur[0]) + '  ' + info.cur[2]);
-                if (ch.logo) {
-                    const img = document.createElement('img');
-                    img.loading = 'lazy';
-                    img.onerror = function () { img.remove(); };
-                    img.src = ch.logo;
-                    el.find('.rmtv__logo').append(img);
-                }
-                el.on('hover:focus', function () { lastFocus = el[0]; cScroll.update(el, true); });
-                el.on('hover:enter', function () { rmtvPlay(shown, i); });
-                body.append(el);
-            });
-            cScroll.append(body);
+            channelsBody = $('<div></div>');
+            cScroll.append(channelsBody);
+            renderMore();
             cScroll.reset();
         }
 
