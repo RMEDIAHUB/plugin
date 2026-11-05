@@ -2709,6 +2709,14 @@
                 },
                 onBack: function () { Lampa.Controller.toggle(back); }
             });
+            // Сразу ставим курсор на передачу, которая идёт сейчас.
+            setTimeout(function () {
+                try {
+                    const box = $('.selectbox');
+                    const cur = box.find('.selectbox-item.selected').first();
+                    if (cur.length) Lampa.Controller.collectionFocus(cur[0], box);
+                } catch (e) {}
+            }, 50);
         }).catch(function () {
             try { Lampa.Loading.stop(); } catch (e) {}
             Lampa.Noty.show('Не удалось загрузить программу передач');
