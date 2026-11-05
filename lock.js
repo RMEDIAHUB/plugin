@@ -9,7 +9,7 @@
     let rmReleaseRequested = false;
     try { rmReleaseRequested = /[?#&]rmrelease=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_req') === '1'; } catch (e) {}
     try { if (rmReleaseRequested) sessionStorage.setItem('rmedia_release_req', '1'); } catch (e) {}
-    window.rmedia_lock_ui_version = '2026-10-31-pin2-codes-hb-tvback';
+    window.rmedia_lock_ui_version = '2026-11-05-tv';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -1799,7 +1799,10 @@
                 remoteSet(RM_TS_KEY, cfg.ts_plugin);
                 rmApplyTorrServer(cfg.ts_plugin);
             }
-            if (typeof cfg.iptv_playlist === 'string') rmApplyIptv(cfg.iptv_playlist);
+            if (typeof cfg.iptv_playlist === 'string') {
+                rmApplyIptv(cfg.iptv_playlist);
+                rmtvSetEnabled(!!cfg.iptv_playlist);
+            }
         } catch (e) { console.warn('[RMEDIA] config apply failed', e); }
     }
     // ===== /RMEDIAHUB CONFIG =====
@@ -2487,6 +2490,309 @@
         }, true);
     }
 
+    // ===== RMEDIAHUB TV =====
+    // Свой пункт «ТВ» в меню слева: каналы плейлиста из админки, без CUB.
+    // Плейлист скачивает наш сервер (браузеры/ТВ не дают Лампе читать чужой m3u).
+    const RMTV_ON_KEY = 'rmedia_tv_on';
+    const RMTV_RECENT_KEY = 'rmedia_tv_recent';
+    const RMTV_ICON = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2.5" y="5.5" width="19" height="13" rx="2.5" stroke="currentColor" stroke-width="2"/><path d="M8 2.5l4 3 4-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 21.5h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+    let rmtvCache = null;
+    let rmtvRegistered = false;
+
+    function rmtvEsc(v) {
+        return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c];
+        });
+    }
+
+    function rmtvEnabled() {
+        return remoteClean(remoteGet(RMTV_ON_KEY, '')) === '1';
+    }
+
+    function rmtvSetEnabled(on) {
+        const was = rmtvEnabled();
+        remoteSet(RMTV_ON_KEY, on ? '1' : '');
+        if (was !== !!on) rmtvCache = null;
+        rmtvMenu();
+    }
+
+    function rmtvIsCubIptv(item) {
+        const action = String(item.attr('data-action') || '');
+        if (action === 'rmedia_tv') return false;
+        const text = String(item.find('.menu__text').text() || '').trim();
+        return /^iptv$/i.test(action) || /^iptv$/i.test(text);
+    }
+
+    function rmtvMenu() {
+        try {
+            const list = $('.menu .menu__list').eq(0);
+            if (!list.length) return;
+            let item = list.find('.menu__item[data-action="rmedia_tv"]');
+            const cub = list.find('.menu__item').filter(function () { return rmtvIsCubIptv($(this)); });
+            if (!rmtvEnabled()) {
+                item.remove();
+                cub.show();
+                return;
+            }
+            if (!item.length) {
+                item = $('<li class="menu__item selector" data-action="rmedia_tv">' +
+                    '<div class="menu__ico">' + RMTV_ICON + '</div>' +
+                    '<div class="menu__text">ТВ</div></li>');
+                item.on('hover:enter', rmtvOpen);
+                if (cub.length) cub.first().before(item); else list.append(item);
+            }
+            // Стандартный IPTV (CUB) прячем: у клиента один понятный пункт «ТВ».
+            cub.hide();
+        } catch (e) {}
+    }
+
+    function rmtvOpen() {
+        rmtvRegister();
+        Lampa.Activity.push({ url: '', title: 'ТВ', component: 'rmedia_tv', page: 1 });
+    }
+
+    async function rmtvLoad(force) {
+        if (!force && rmtvCache && Date.now() - rmtvCache.at < 10 * 60 * 1000) return rmtvCache.data;
+        const device = detectDeviceInfo();
+        const r = await fetch(remoteApi() + '/v1/client/heartbeat?_=' + Date.now(), {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                id: remoteClientId(),
+                key: remoteClientKey(),
+                install_id: device.install_id,
+                device_name: device.device_name,
+                platform: device.platform,
+                user_agent: device.user_agent,
+                want: 'tv'
+            })
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        if (!data || data.status !== 'active') throw new Error('inactive');
+        const tv = data.tv || { ok: false, error: 'no_playlist', channels: [] };
+        if (tv.ok) rmtvCache = { at: Date.now(), data: tv };
+        return tv;
+    }
+
+    function rmtvRecent() {
+        let list = [];
+        try { list = JSON.parse(remoteGet(RMTV_RECENT_KEY, '[]')) || []; } catch (e) {}
+        return Array.isArray(list) ? list : [];
+    }
+
+    function rmtvRemember(ch) {
+        if (!ch || !ch.url) return;
+        const list = rmtvRecent().filter(function (c) { return c && c.name !== ch.name; });
+        list.unshift({ name: ch.name, group: ch.group || '', logo: ch.logo || '', url: ch.url });
+        remoteSet(RMTV_RECENT_KEY, JSON.stringify(list.slice(0, 12)));
+    }
+
+    function rmtvPlay(list, index) {
+        if (!list || !list[index]) return;
+        const toCh = function (c) {
+            return { name: c.name, group: c.group || '', logo: c.logo || '', url: c.url };
+        };
+        try {
+            Lampa.Player.iptv({
+                title: list[index].name,
+                url: list[index].url,
+                position: index,
+                total: list.length,
+                onGetChannel: function (pos) { return toCh(list[pos] || list[0]); },
+                onPlay: function (ch) { rmtvRemember(ch); },
+                onGetProgram: function (ch, pos, container) {
+                    try { $(container).html('<div class="player-panel-iptv-item__prog-load">' + rmtvEsc(ch && ch.group || '') + '</div>'); } catch (e) {}
+                }
+            });
+        } catch (e) {
+            // Старые сборки Лампы без IPTV-плеера: обычный плеер со списком.
+            Lampa.Player.play({ title: list[index].name, url: list[index].url });
+            Lampa.Player.playlist(list.map(function (c) { return { title: c.name, url: c.url }; }));
+            rmtvRemember(list[index]);
+        }
+    }
+
+    function rmtvStyle() {
+        if (document.getElementById('rmedia-tv-style')) return;
+        const st = document.createElement('style');
+        st.id = 'rmedia-tv-style';
+        st.textContent =
+            '.rmtv{display:flex;padding:0 1.5em;box-sizing:border-box}' +
+            '.rmtv__groups{width:22em;flex-shrink:0;margin-right:1.5em}' +
+            '.rmtv__channels{flex:1;min-width:0}' +
+            '.rmtv__group{padding:.75em 1em;border-radius:.6em;font-size:1.3em;margin-bottom:.3em;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+            '.rmtv__group span{opacity:.5;margin-left:.4em;font-size:.85em}' +
+            '.rmtv__group.active{color:#fff;background:rgba(255,255,255,.08)}' +
+            '.rmtv__group.focus{background:#fff;color:#000}' +
+            '.rmtv__ch{display:flex;align-items:center;padding:.55em .8em;border-radius:.6em;margin-bottom:.3em}' +
+            '.rmtv__ch.focus{background:#fff;color:#000}' +
+            '.rmtv__num{width:3em;flex-shrink:0;opacity:.5;font-size:1.1em}' +
+            '.rmtv__logo{width:4.2em;height:2.6em;flex-shrink:0;margin-right:1em;border-radius:.4em;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;overflow:hidden}' +
+            '.rmtv__logo img{max-width:100%;max-height:100%;object-fit:contain}' +
+            '.rmtv__name{font-size:1.3em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+            '.rmtv__msg{padding:3em 1em;font-size:1.4em;text-align:center;opacity:.8;line-height:1.5}';
+        document.head.appendChild(st);
+    }
+
+    function RmTvComponent(object) {
+        const html = $('<div class="rmtv"><div class="rmtv__groups"></div><div class="rmtv__channels"></div></div>');
+        const gScroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
+        const cScroll = new Lampa.Scroll({ mask: true, over: true, step: 300 });
+        const component = this;
+        let all = [];
+        let shown = [];
+        let lastFocus = null;
+        let alive = true;
+
+        gScroll.minus();
+        cScroll.minus();
+        html.find('.rmtv__groups').append(gScroll.render());
+        html.find('.rmtv__channels').append(cScroll.render());
+
+        function message(text) {
+            gScroll.clear();
+            cScroll.clear();
+            cScroll.append($('<div class="rmtv__msg selector">' + text + '</div>'));
+        }
+
+        function showChannels(list) {
+            shown = list;
+            cScroll.clear();
+            const body = $('<div></div>');
+            list.forEach(function (ch, i) {
+                const el = $('<div class="rmtv__ch selector">' +
+                    '<div class="rmtv__num">' + (i + 1) + '</div>' +
+                    '<div class="rmtv__logo"></div>' +
+                    '<div class="rmtv__name">' + rmtvEsc(ch.name) + '</div></div>');
+                if (ch.logo) {
+                    const img = document.createElement('img');
+                    img.loading = 'lazy';
+                    img.onerror = function () { img.remove(); };
+                    img.src = ch.logo;
+                    el.find('.rmtv__logo').append(img);
+                }
+                el.on('hover:focus', function () { lastFocus = el[0]; cScroll.update(el, true); });
+                el.on('hover:enter', function () { rmtvPlay(shown, i); });
+                body.append(el);
+            });
+            cScroll.append(body);
+            cScroll.reset();
+        }
+
+        function build(channels) {
+            all = channels;
+            const groups = [];
+            const byGroup = {};
+            channels.forEach(function (ch) {
+                const g = ch.group || 'Без группы';
+                if (!byGroup[g]) { byGroup[g] = []; groups.push(g); }
+                byGroup[g].push(ch);
+            });
+            const entries = [];
+            const recent = rmtvRecent().filter(function (r) {
+                return channels.some(function (c) { return c.url === r.url || c.name === r.name; });
+            });
+            if (recent.length) entries.push({ title: 'Недавние', list: recent });
+            entries.push({ title: 'Все каналы', list: channels });
+            groups.forEach(function (g) { entries.push({ title: g, list: byGroup[g] }); });
+
+            gScroll.clear();
+            const body = $('<div></div>');
+            let first = null;
+            entries.forEach(function (entry) {
+                const el = $('<div class="rmtv__group selector">' + rmtvEsc(entry.title) +
+                    '<span>' + entry.list.length + '</span></div>');
+                el.on('hover:focus', function () { lastFocus = el[0]; gScroll.update(el, true); });
+                el.on('hover:enter', function () {
+                    body.find('.rmtv__group').removeClass('active');
+                    el.addClass('active');
+                    showChannels(entry.list);
+                    // Сразу переходим к каналам выбранной группы.
+                    const firstCh = cScroll.render().find('.rmtv__ch').first();
+                    if (firstCh.length) {
+                        lastFocus = firstCh[0];
+                        Lampa.Controller.collectionSet(html);
+                        Lampa.Controller.collectionFocus(firstCh[0], html);
+                    }
+                });
+                if (!first && entry.title === 'Все каналы') first = { el: el, list: entry.list };
+                body.append(el);
+            });
+            gScroll.append(body);
+            if (first) { first.el.addClass('active'); showChannels(first.list); }
+        }
+
+        this.create = function () {
+            this.activity.loader(true);
+            if (!remoteClientId() || !remoteClientKey()) {
+                message('Устройство не активировано.');
+                this.activity.loader(false);
+                return this.render();
+            }
+            rmtvLoad(false).then(function (tv) {
+                if (!alive) return;
+                component.activity.loader(false);
+                if (tv.ok && tv.channels && tv.channels.length) build(tv.channels);
+                else if (tv.error === 'no_playlist') message('ТВ-плейлист не подключён.<br>Обратитесь к администратору.');
+                else message('Не удалось загрузить каналы.<br>Попробуйте позже или обратитесь к администратору.');
+                component.activity.toggle();
+            }).catch(function () {
+                if (!alive) return;
+                component.activity.loader(false);
+                message('Нет связи с сервером RMediaHub.<br>Проверьте интернет.');
+                component.activity.toggle();
+            });
+            return this.render();
+        };
+
+        this.start = function () {
+            Lampa.Controller.add('content', {
+                toggle: function () {
+                    Lampa.Controller.collectionSet(html);
+                    Lampa.Controller.collectionFocus(lastFocus || false, html);
+                },
+                left: function () {
+                    if (Navigator.canmove('left')) Navigator.move('left');
+                    else Lampa.Controller.toggle('menu');
+                },
+                right: function () { Navigator.move('right'); },
+                up: function () {
+                    if (Navigator.canmove('up')) Navigator.move('up');
+                    else Lampa.Controller.toggle('head');
+                },
+                down: function () { Navigator.move('down'); },
+                back: function () { Lampa.Activity.backward(); }
+            });
+            Lampa.Controller.toggle('content');
+        };
+
+        this.pause = function () {};
+        this.stop = function () {};
+        this.render = function () { return html; };
+        this.destroy = function () {
+            alive = false;
+            try { gScroll.destroy(); cScroll.destroy(); } catch (e) {}
+            html.remove();
+        };
+    }
+
+    function rmtvRegister() {
+        if (rmtvRegistered || !window.Lampa || !Lampa.Component) return;
+        rmtvRegistered = true;
+        rmtvStyle();
+        Lampa.Component.add('rmedia_tv', RmTvComponent);
+    }
+
+    function rmtvInit() {
+        try {
+            rmtvRegister();
+            rmtvMenu();
+        } catch (e) { console.warn('[RMEDIA TV] init failed', e); }
+    }
+    // ===== /RMEDIAHUB TV =====
+
     function init() {
         installBackCrashGuard();
         migrateLegacyPin();
@@ -2509,6 +2815,7 @@
         bindSafePlayerButton();
         protectAdminClicks();
         bindMobileSettingsBackFix();
+        rmtvInit();
 
         setTimeout(bindExtensionsGate, 300);
         setTimeout(bindExtensionsGate, 1000);
@@ -2522,6 +2829,7 @@
             hideRestrictedUI();
             hideClientHeadExtras();
             hideKinoPubMenu();
+            rmtvMenu();
             installSettingsGuards();
 
             if (!extensionGateBound || $('.settings__body').length) {
