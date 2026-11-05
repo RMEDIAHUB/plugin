@@ -9,7 +9,7 @@
     let rmReleaseRequested = false;
     try { rmReleaseRequested = /[?#&]rmrelease=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_req') === '1'; } catch (e) {}
     try { if (rmReleaseRequested) sessionStorage.setItem('rmedia_release_req', '1'); } catch (e) {}
-    window.rmedia_lock_ui_version = '2026-11-05-tv';
+    window.rmedia_lock_ui_version = '2026-11-05-tv-archive';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -2607,6 +2607,115 @@
             (live ? '<div style="height:.25em;width:12em;max-width:100%;background:rgba(255,255,255,.2);border-radius:1em;margin-top:.35em"><div style="height:100%;width:' + pct + '%;background:#fff;border-radius:1em"></div></div>' : '');
     }
 
+    // Ссылка на запись передачи. Flussonic (…/mono.m3u8 → …/mono-START-DUR.m3u8),
+    // catchup="shift" (?utc=&lutc=) и шаблоны catchup-source из плейлиста.
+    function rmtvArchiveUrl(ch, start, stop) {
+        const now = Math.floor(Date.now() / 1000);
+        const dur = Math.max(60, Math.min(stop, now) - start);
+        const vars = { start: start, utc: start, end: stop, utcend: stop, lutc: now, now: now,
+            timestamp: now, duration: dur, offset: Math.max(0, now - start) };
+        const fill = function (t) {
+            return t.replace(/\$?\{(\w+)(?::[^}]*)?\}/g, function (m, k) { return k in vars ? vars[k] : m; });
+        };
+        const url = String(ch.url || '');
+        const type = String(ch.catchup || '').toLowerCase();
+        if (ch.catchup_src) {
+            const src = fill(ch.catchup_src);
+            return (type === 'append' || !/^https?:/i.test(src)) ? url + src : src;
+        }
+        if (type === 'shift' || type === 'archive' || type === 'timeshift') {
+            return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'utc=' + start + '&lutc=' + now;
+        }
+        const m = url.match(/^(.*\/)([^\/?]+)\.(m3u8|ts)(\?.*)?$/i);
+        if (m) {
+            const name = /^(mono|index|video)$/i.test(m[2]) ? m[2] : 'index';
+            return m[1] + name + '-' + start + '-' + dur + '.' + m[3] + (m[4] || '');
+        }
+        return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'utc=' + start + '&lutc=' + now;
+    }
+
+    async function rmtvProgramme(ch) {
+        const device = detectDeviceInfo();
+        const r = await fetch(remoteApi() + '/v1/client/heartbeat?_=' + Date.now(), {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                id: remoteClientId(), key: remoteClientKey(),
+                install_id: device.install_id, device_name: device.device_name,
+                platform: device.platform, user_agent: device.user_agent,
+                want: 'epg', channel: { tvg: ch.tvg || '', name: ch.name || '' }
+            })
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        return (data && data.programme && data.programme.list) || [];
+    }
+
+    function rmtvDay(ts) {
+        const d = new Date(ts * 1000);
+        const days = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+        return days[d.getDay()] + ' ' + ('0' + d.getDate()).slice(-2) + '.' + ('0' + (d.getMonth() + 1)).slice(-2);
+    }
+
+    function rmtvPlayArchive(ch, p) {
+        const url = rmtvArchiveUrl(ch, p[0], p[1]);
+        const play = function () {
+            Lampa.Player.play({ title: ch.name + ' · ' + rmtvTime(p[0]) + ' ' + p[2], url: url });
+        };
+        try {
+            if (Lampa.Player.opened && Lampa.Player.opened()) { Lampa.Player.close(); setTimeout(play, 400); return; }
+        } catch (e) {}
+        play();
+    }
+
+    // Программа передач канала: прошедшие (с архивом) можно включить, текущая отмечена.
+    function rmtvShowProgramme(ch, onLive) {
+        const back = (Lampa.Controller.enabled() || {}).name || 'content';
+        try { Lampa.Loading.start(function () { Lampa.Loading.stop(); }); } catch (e) {}
+        rmtvProgramme(ch).then(function (list) {
+            try { Lampa.Loading.stop(); } catch (e) {}
+            const now = Date.now() / 1000;
+            const recFrom = ch.rec ? now - ch.rec * 86400 : now;
+            const items = [];
+            let lastDay = '';
+            list.forEach(function (p) {
+                if (p[1] < recFrom && p[1] < now) return;
+                const day = rmtvDay(p[0]);
+                const live = p[0] <= now && p[1] > now;
+                const archive = !live && p[1] <= now && ch.rec && p[0] >= recFrom;
+                if (day !== lastDay) items.push({ title: day, separator: true });
+                items.push({
+                    title: (live ? '● ' : archive ? '⏪ ' : '') + rmtvTime(p[0]) + '  ' + p[2],
+                    selected: live,
+                    ghost: !live && !archive,
+                    prog: p, live: live, archive: archive
+                });
+                lastDay = day;
+            });
+            if (!items.some(function (i) { return !i.separator; })) {
+                Lampa.Noty.show('Программа передач для этого канала не найдена');
+                Lampa.Controller.toggle(back);
+                return;
+            }
+            Lampa.Select.show({
+                title: ch.name + (ch.rec ? ' · архив ' + ch.rec + ' дн.' : ''),
+                items: items,
+                onSelect: function (item) {
+                    if (item.live) { Lampa.Controller.toggle(back); if (onLive) onLive(); return; }
+                    if (item.archive) { rmtvPlayArchive(ch, item.prog); return; }
+                    Lampa.Noty.show('Эта передача ещё не началась');
+                    Lampa.Controller.toggle(back);
+                },
+                onBack: function () { Lampa.Controller.toggle(back); }
+            });
+        }).catch(function () {
+            try { Lampa.Loading.stop(); } catch (e) {}
+            Lampa.Noty.show('Не удалось загрузить программу передач');
+            Lampa.Controller.toggle(back);
+        });
+    }
+
     function rmtvRecent() {
         let list = [];
         try { list = JSON.parse(remoteGet(RMTV_RECENT_KEY, '[]')) || []; } catch (e) {}
@@ -2623,7 +2732,8 @@
     function rmtvPlay(list, index) {
         if (!list || !list[index]) return;
         const toCh = function (c) {
-            return { name: c.name, group: c.group || '', logo: c.logo || '', url: c.url, epg: c.epg || null };
+            return { name: c.name, group: c.group || '', logo: c.logo || '', url: c.url, epg: c.epg || null,
+                tvg: c.tvg || '', rec: c.rec || 0, catchup: c.catchup || '', catchup_src: c.catchup_src || '' };
         };
         try {
             Lampa.Player.iptv({
@@ -2640,6 +2750,7 @@
                     return ch;
                 },
                 onPlay: function (ch) { rmtvRemember(ch); },
+                onMenu: function (ch) { rmtvShowProgramme(ch); },
                 onGetProgram: function (ch, pos, container) {
                     try { $(container).html(rmtvProgramHtml(ch)); } catch (e) {}
                 }
@@ -2673,6 +2784,7 @@
             '.rmtv__name{font-size:1.3em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
             '.rmtv__prog{font-size:1em;opacity:.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:.15em}' +
             '.rmtv__prog:empty{display:none}' +
+            '.rmtv__rec{font-size:.6em;margin-left:.7em;padding:.15em .5em;border-radius:.4em;border:1px solid currentColor;opacity:.5;vertical-align:middle}' +
             '.rmtv__msg{padding:3em 1em;font-size:1.4em;text-align:center;opacity:.8;line-height:1.5}';
         document.head.appendChild(st);
     }
@@ -2710,6 +2822,7 @@
                 '<div class="rmtv__prog"></div></div></div>');
             const info = rmtvNow(ch);
             if (info && info.cur) el.find('.rmtv__prog').text(rmtvTime(info.cur[0]) + '  ' + info.cur[2]);
+            if (ch.rec) el.find('.rmtv__name').append('<span class="rmtv__rec">архив</span>');
             if (ch.logo) {
                 const img = document.createElement('img');
                 img.loading = 'lazy';
@@ -2724,6 +2837,7 @@
                 if (i >= renderedCount - 15) renderMore();
             });
             el.on('hover:enter', function () { rmtvPlay(shown, i); });
+            el.data('rmtv-index', i);
             return el;
         }
 
@@ -2853,7 +2967,14 @@
                     if (Navigator.canmove('left')) Navigator.move('left');
                     else Lampa.Controller.toggle('menu');
                 },
-                right: function () { Navigator.move('right'); },
+                right: function () {
+                    if (Navigator.canmove('right')) { Navigator.move('right'); return; }
+                    // На канале «вправо» — программа передач (и архив).
+                    const idx = lastFocus ? $(lastFocus).data('rmtv-index') : undefined;
+                    if (typeof idx === 'number' && shown[idx]) {
+                        rmtvShowProgramme(shown[idx], function () { rmtvPlay(shown, idx); });
+                    }
+                },
                 up: function () {
                     if (Navigator.canmove('up')) Navigator.move('up');
                     else Lampa.Controller.toggle('head');
