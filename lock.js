@@ -2596,15 +2596,15 @@
         const info = rmtvNow(ch);
         if (!info) return '<div class="player-panel-iptv-item__prog-load">' + rmtvEsc(ch && ch.group || '') + '</div>';
         const now = Date.now() / 1000;
-        let out = '';
-        info.list.slice(info.idx, info.idx + 3).forEach(function (p, n) {
-            const live = p[0] <= now;
-            const pct = live ? Math.max(0, Math.min(100, Math.round((now - p[0]) / Math.max(1, p[1] - p[0]) * 100))) : 0;
-            out += '<div style="display:flex;gap:.6em;' + (n ? 'opacity:.55;' : '') + 'margin-bottom:.2em">' +
-                '<span style="opacity:.7">' + rmtvTime(p[0]) + '</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + rmtvEsc(p[2]) + '</span></div>' +
-                (live ? '<div style="height:.2em;background:rgba(255,255,255,.2);border-radius:1em;margin:.2em 0 .5em"><div style="height:100%;width:' + pct + '%;background:#fff;border-radius:1em"></div></div>' : '');
-        });
-        return out;
+        const cur = info.list[info.idx];
+        const next = info.list[info.idx + 1];
+        const live = cur[0] <= now;
+        const pct = live ? Math.max(0, Math.min(100, Math.round((now - cur[0]) / Math.max(1, cur[1] - cur[0]) * 100))) : 0;
+        return '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' +
+            '<span style="opacity:.6">' + rmtvTime(cur[0]) + '</span>&nbsp; ' + rmtvEsc(cur[2]) +
+            (next ? '<span style="opacity:.5">&nbsp;&nbsp;→&nbsp; ' + rmtvTime(next[0]) + '&nbsp; ' + rmtvEsc(next[2]) + '</span>' : '') +
+            '</div>' +
+            (live ? '<div style="height:.25em;width:12em;max-width:100%;background:rgba(255,255,255,.2);border-radius:1em;margin-top:.35em"><div style="height:100%;width:' + pct + '%;background:#fff;border-radius:1em"></div></div>' : '');
     }
 
     function rmtvRecent() {
