@@ -2572,8 +2572,39 @@
         const data = await r.json();
         if (!data || data.status !== 'active') throw new Error('inactive');
         const tv = data.tv || { ok: false, error: 'no_playlist', channels: [] };
-        if (tv.ok) rmtvCache = { at: Date.now(), data: tv };
+        if (tv.ok) rmtvCache = { at: tv.epg_state === 'loading' ? Date.now() - 9 * 60 * 1000 : Date.now(), data: tv };
         return tv;
+    }
+
+    function rmtvTime(ts) {
+        const d = new Date(ts * 1000);
+        return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    }
+
+    // Текущая и следующие передачи канала: [[start, stop, title], ...] (секунды).
+    function rmtvNow(ch) {
+        const list = ch && ch.epg;
+        if (!list || !list.length) return null;
+        const now = Date.now() / 1000;
+        for (let i = 0; i < list.length; i++) {
+            if (list[i][1] > now) return { cur: list[i][0] <= now ? list[i] : null, idx: i, list: list };
+        }
+        return null;
+    }
+
+    function rmtvProgramHtml(ch) {
+        const info = rmtvNow(ch);
+        if (!info) return '<div class="player-panel-iptv-item__prog-load">' + rmtvEsc(ch && ch.group || '') + '</div>';
+        const now = Date.now() / 1000;
+        let out = '';
+        info.list.slice(info.idx, info.idx + 3).forEach(function (p, n) {
+            const live = p[0] <= now;
+            const pct = live ? Math.max(0, Math.min(100, Math.round((now - p[0]) / Math.max(1, p[1] - p[0]) * 100))) : 0;
+            out += '<div style="display:flex;gap:.6em;' + (n ? 'opacity:.55;' : '') + 'margin-bottom:.2em">' +
+                '<span style="opacity:.7">' + rmtvTime(p[0]) + '</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + rmtvEsc(p[2]) + '</span></div>' +
+                (live ? '<div style="height:.2em;background:rgba(255,255,255,.2);border-radius:1em;margin:.2em 0 .5em"><div style="height:100%;width:' + pct + '%;background:#fff;border-radius:1em"></div></div>' : '');
+        });
+        return out;
     }
 
     function rmtvRecent() {
@@ -2592,7 +2623,7 @@
     function rmtvPlay(list, index) {
         if (!list || !list[index]) return;
         const toCh = function (c) {
-            return { name: c.name, group: c.group || '', logo: c.logo || '', url: c.url };
+            return { name: c.name, group: c.group || '', logo: c.logo || '', url: c.url, epg: c.epg || null };
         };
         try {
             Lampa.Player.iptv({
@@ -2603,7 +2634,7 @@
                 onGetChannel: function (pos) { return toCh(list[pos] || list[0]); },
                 onPlay: function (ch) { rmtvRemember(ch); },
                 onGetProgram: function (ch, pos, container) {
-                    try { $(container).html('<div class="player-panel-iptv-item__prog-load">' + rmtvEsc(ch && ch.group || '') + '</div>'); } catch (e) {}
+                    try { $(container).html(rmtvProgramHtml(ch)); } catch (e) {}
                 }
             });
         } catch (e) {
@@ -2631,7 +2662,10 @@
             '.rmtv__num{width:3em;flex-shrink:0;opacity:.5;font-size:1.1em}' +
             '.rmtv__logo{width:4.2em;height:2.6em;flex-shrink:0;margin-right:1em;border-radius:.4em;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;overflow:hidden}' +
             '.rmtv__logo img{max-width:100%;max-height:100%;object-fit:contain}' +
+            '.rmtv__text{min-width:0;flex:1}' +
             '.rmtv__name{font-size:1.3em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+            '.rmtv__prog{font-size:1em;opacity:.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:.15em}' +
+            '.rmtv__prog:empty{display:none}' +
             '.rmtv__msg{padding:3em 1em;font-size:1.4em;text-align:center;opacity:.8;line-height:1.5}';
         document.head.appendChild(st);
     }
@@ -2665,7 +2699,10 @@
                 const el = $('<div class="rmtv__ch selector">' +
                     '<div class="rmtv__num">' + (i + 1) + '</div>' +
                     '<div class="rmtv__logo"></div>' +
-                    '<div class="rmtv__name">' + rmtvEsc(ch.name) + '</div></div>');
+                    '<div class="rmtv__text"><div class="rmtv__name">' + rmtvEsc(ch.name) + '</div>' +
+                    '<div class="rmtv__prog"></div></div></div>');
+                const info = rmtvNow(ch);
+                if (info && info.cur) el.find('.rmtv__prog').text(rmtvTime(info.cur[0]) + '  ' + info.cur[2]);
                 if (ch.logo) {
                     const img = document.createElement('img');
                     img.loading = 'lazy';
@@ -2681,6 +2718,17 @@
             cScroll.reset();
         }
 
+        // Программа догрузилась: подставляем её в уже открытый список без перестройки.
+        function rmtvApplyEpg(fresh) {
+            const byUrl = {};
+            fresh.forEach(function (c) { byUrl[c.url] = c; });
+            all.forEach(function (c) { if (byUrl[c.url] && byUrl[c.url].epg) c.epg = byUrl[c.url].epg; });
+            cScroll.render().find('.rmtv__ch').each(function (i) {
+                const info = rmtvNow(shown[i]);
+                if (info && info.cur) $(this).find('.rmtv__prog').text(rmtvTime(info.cur[0]) + '  ' + info.cur[2]);
+            });
+        }
+
         function build(channels) {
             all = channels;
             const groups = [];
@@ -2691,9 +2739,15 @@
                 byGroup[g].push(ch);
             });
             const entries = [];
-            const recent = rmtvRecent().filter(function (r) {
-                return channels.some(function (c) { return c.url === r.url || c.name === r.name; });
-            });
+            const recent = rmtvRecent().map(function (r) {
+                for (let i = 0; i < channels.length; i++) {
+                    if (channels[i].name === r.name) return channels[i];
+                }
+                for (let j = 0; j < channels.length; j++) {
+                    if (channels[j].url === r.url) return channels[j];
+                }
+                return null;
+            }).filter(Boolean);
             if (recent.length) entries.push({ title: 'Недавние', list: recent });
             entries.push({ title: 'Все каналы', list: channels });
             groups.forEach(function (g) { entries.push({ title: g, list: byGroup[g] }); });
@@ -2734,7 +2788,18 @@
             rmtvLoad(false).then(function (tv) {
                 if (!alive) return;
                 component.activity.loader(false);
-                if (tv.ok && tv.channels && tv.channels.length) build(tv.channels);
+                if (tv.ok && tv.channels && tv.channels.length) {
+                    build(tv.channels);
+                    if (tv.epg_state === 'loading') {
+                        setTimeout(function () {
+                            if (!alive) return;
+                            rmtvLoad(true).then(function (fresh) {
+                                if (!alive || !fresh.ok || fresh.epg_state !== 'ready') return;
+                                rmtvApplyEpg(fresh.channels);
+                            }).catch(function () {});
+                        }, 25000);
+                    }
+                }
                 else if (tv.error === 'no_playlist') message('ТВ-плейлист не подключён.<br>Обратитесь к администратору.');
                 else message('Не удалось загрузить каналы.<br>Попробуйте позже или обратитесь к администратору.');
                 component.activity.toggle();
