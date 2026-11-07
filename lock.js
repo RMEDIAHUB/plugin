@@ -1362,11 +1362,21 @@
         if (button.length && button[0].focus) button[0].focus();
     }
 
+    // Браузерный фокус держим на той же кнопке, что подсвечена пультом,
+    // иначе ОК «нажимает» ещё и первую кнопку (открывался Телеграм).
+    function syncRemoteDomFocus() {
+        try {
+            const el = remoteOverlay && remoteOverlay.find('.selector.focus')[0];
+            if (el && el.focus && document.activeElement !== el) el.focus();
+        } catch (e) {}
+    }
+
     function moveRemoteFocus(direction) {
         if (!remoteOverlay) return;
         try {
             if (window.Navigator && typeof Navigator.move === 'function' && Navigator.canmove && Navigator.canmove(direction)) {
                 Navigator.move(direction);
+                syncRemoteDomFocus();
                 return;
             }
         } catch (e) {}
@@ -1376,6 +1386,7 @@
         const next = direction === 'left' || direction === 'up'
             ? Math.max(0, current - 1) : Math.min(items.length - 1, current + 1);
         try { Lampa.Controller.collectionFocus(items[next], remoteOverlay); } catch (e) { focusRemoteOverlay(); }
+        syncRemoteDomFocus();
     }
 
     function remoteGet(name, fallback) {
