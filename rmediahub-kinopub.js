@@ -2787,8 +2787,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
         function error(err) {
             loading(false);rows.empty();state.text(messages[err] || ('Ошибка KinoPub: '+err));
             action('Повторить поиск',function(){find();});
-            if(['link_required','refresh_uncertain','session_missing','invalid_refresh_token'].indexOf(err)>=0)action('Привязать KinoPub',function(){link(function(){find();});});
-            else action('Настройки KinoPub',function(){openSource();});
+            action('Связаться с администратором',function(){L.Noty.show('Напишите администратору RMediaHub');});
             activate();
         }
         function action(label,fn) {
@@ -2834,9 +2833,8 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
             bar.empty();
             tool('Поиск',title,function(){input('Уточнить название в KinoPub',false,function(q){find(q);});});
             tool('Источник','KinoPub',function(){
-                var items=[{title:'KinoPub',selected:true},{title:'Открыть ссылку KinoPub',open:true}];
-                if(detail)items.push({title:'Обновить озвучки',reload:true},{title:'Проверить озвучки',diagnostics:true});
-                items.push({title:'Проверить воспроизведение',playback:true});
+                var items=[{title:'KinoPub',selected:true}];
+                if(detail)items.push({title:'Обновить озвучки',reload:true});
                 choose('Источник',items,function(a){if(a.open)openKinoPubLink();else if(a.reload)loadItem(detail.id,true);else if(a.diagnostics)checkAudios();else if(a.playback)playbackDiagnostics();else activate();});
             });
             if(detail && detail.videos.length>1) {
@@ -2861,7 +2859,8 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                 choose('Предпочитаемое качество',[{title:'Спрашивать перед запуском',value:''},{title:'Максимальное',value:'max'},
                     {title:'1080p',value:'1080'},{title:'720p',value:'720'}],function(a){quality=a.value;rebuildTools();activate();});
             });
-            tool('Настройки','',function(){openSource();});
+            // «Настройки» на экране просмотра не показываем: клиенты видели привязку и токены.
+            // Администратор открывает их через Расширения Лампы (под PIN).
         }
         function canEpisodes() {
             if(!detail || !card.id || !L.Api || !L.Api.seasons)return false;
