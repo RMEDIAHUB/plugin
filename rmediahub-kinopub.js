@@ -2922,7 +2922,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                         row.find('small').text(left?'осталось '+left+' мин':(minutes?minutes+' мин':''));
                         if(percent>0 && percent<95)watchedRow=row;
                         row.on('hover:enter',function(){video=v;language='';renderVoices();});
-                        if(object.episode && n===Number(object.episode))focusRow=row;
+                        if((object.episode && n===Number(object.episode)) || (!object.episode && video && v.key===video.key && !focusRow))focusRow=row;
                     }
                     else {
                         row.addClass('rmhd-episode--soon');
@@ -3017,7 +3017,20 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                 if(object.videoIndex!=null)video=data.videos[object.videoIndex] || video;
                 if(object.season || object.episode)video=data.videos.filter(function(v){return (!object.season || v.season===Number(object.season)) && (!object.episode || v.episode===Number(object.episode));})[0] || video;
                 meta.text([data.year || year,editionLabel(data.type),qualityLabel(data.quality)].filter(Boolean).join(' · '));
-                if(canEpisodes())renderEpisodes();else renderVoices();
+                if(canEpisodes()) {
+                    // Открываем сезон, который смотрели последним (как в BWA).
+                    if(!object.season && !object.episode) {
+                        var lastSeen=null;
+                        data.videos.forEach(function(v){
+                            if(v.season===null)return;
+                            var p=Number(timeline(v).percent)||0;
+                            if(p>0 && (!lastSeen || v.season>lastSeen.season || (v.season===lastSeen.season && v.episode>lastSeen.episode)))lastSeen=v;
+                        });
+                        if(lastSeen)video=lastSeen;
+                    }
+                    renderEpisodes();
+                }
+                else renderVoices();
             });
         }
         function renderMatches() {
