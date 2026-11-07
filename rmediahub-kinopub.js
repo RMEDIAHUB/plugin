@@ -2760,6 +2760,8 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
     function Watch(object) {
         var self=this, card=object.movie || {}, alive=true, started=false, generation=0, last=false, requests=[];
         var detail=null, video=null, candidates=[], language='', quality='', busy=false,automaticItemId=null,pageItemId=null;
+        // Список серий как в карточке Лампы: кадры, названия и даты из TMDB, видео — из KinoPub.
+        var mode='voices', tmdbSeasons={}, seasonNow=null;
         var title=card.title || card.name || '', year=String(card.release_date || card.first_air_date || card.year || '').slice(0,4);
         var files=new L.Files({movie:{id:card.id,title:escape(title),original_title:escape(card.original_title || card.original_name || ''),img:poster(card),source:card.source}});
         var root=files.render().addClass('rmhd-watch'), scroll=new L.Scroll({mask:true,over:true});
@@ -2842,31 +2844,109 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                 detail.videos.forEach(function(v){if(v.season!==null && seasons.indexOf(v.season)<0)seasons.push(v.season);});
                 if(seasons.length)tool('Сезон',String(video.season),function(){
                     choose('Сезон',seasons.map(function(s){return {title:'Сезон '+s,value:s,selected:s===video.season};}),function(a){
-                        video=detail.videos.filter(function(v){return v.season===a.value;})[0];language='';renderVoices();
+                        video=detail.videos.filter(function(v){return v.season===a.value;})[0];language='';
+                        if(canEpisodes())renderEpisodes();else renderVoices();
                     });
                 });
-                tool(seasons.length?'Серия':'Видео',video.episode?String(video.episode):video.title,function(){
+                if(seasons.length && canEpisodes())tool('Серии',mode==='episodes'?'':String(video.episode),function(){renderEpisodes();});
+                else tool(seasons.length?'Серия':'Видео',video.episode?String(video.episode):video.title,function(){
                     choose(seasons.length?'Серия':'Видео',detail.videos.filter(function(v){return v.season===video.season;}).map(function(v){return {title:escape(v.title),video:v,selected:v.key===video.key};}),function(a){video=a.video;language='';renderVoices();});
                 });
             }
-            if(video)tool('Фильтр',language?language.toUpperCase():'Все озвучки',function(){
+            if(video && mode==='voices')tool('Фильтр',language?language.toUpperCase():'Все озвучки',function(){
                 var langs=[];currentVoices().forEach(function(a){if(a.lang && langs.indexOf(a.lang)<0)langs.push(a.lang);});
                 choose('Язык озвучки',[{title:'Все озвучки',lang:'',selected:!language}].concat(langs.map(function(l){return {title:l.toUpperCase(),lang:l,selected:language===l};})),function(a){language=a.lang;renderVoices();});
             });
-            if(video)tool('Качество',quality || 'Спросить',function(){
+            if(video && mode==='voices')tool('Качество',quality || 'Спросить',function(){
                 choose('Предпочитаемое качество',[{title:'Спрашивать перед запуском',value:''},{title:'Максимальное',value:'max'},
                     {title:'1080p',value:'1080'},{title:'720p',value:'720'}],function(a){quality=a.value;rebuildTools();activate();});
             });
             tool('Настройки','',function(){openSource();});
         }
+        function canEpisodes() {
+            if(!detail || !card.id || !L.Api || !L.Api.seasons)return false;
+            if(card.source && !/^(tmdb|cub)$/.test(String(card.source)))return false;
+            return detail.videos.some(function(v){return v.season!==null && v.season>0;});
+        }
+        function tmdbImg(path) {
+            try{return L.Api.img(path,'w300');}catch(e){return 'https://image.tmdb.org/t/p/w300'+path;}
+        }
+        function tmdbEpisode(season,episode) {
+            var data=tmdbSeasons[season];if(!data || !data.episodes)return null;
+            for(var i=0;i<data.episodes.length;i++)if(data.episodes[i].episode_number===episode)return data.episodes[i];
+            return null;
+        }
+        function loadSeason(season,done) {
+            if(tmdbSeasons[season]!==undefined)return done();
+            var finished=false, timer=setTimeout(function(){if(!finished){finished=true;tmdbSeasons[season]=null;done();}},6000);
+            try{
+                L.Api.seasons(card,[season],function(data){
+                    if(finished)return;finished=true;clearTimeout(timer);
+                    tmdbSeasons[season]=data && data[''+season] && data[''+season].episodes?data[''+season]:null;done();
+                });
+            }catch(e){finished=true;clearTimeout(timer);tmdbSeasons[season]=null;done();}
+        }
+        function dateLabel(value) {
+            var d=new Date(String(value)+'T12:00:00');if(isNaN(d.getTime()))return '';
+            try{return d.toLocaleDateString('ru-RU',{day:'numeric',month:'long'});}catch(e){return value;}
+        }
+        function renderEpisodes() {
+            var season=video.season;mode='episodes';seasonNow=season;
+            rows.empty();last=false;rebuildTools();loading(true);state.text('Загружаем серии…');
+            loadSeason(season,function(){
+                if(!alive || mode!=='episodes' || seasonNow!==season)return;
+                loading(false);
+                var kp=detail.videos.filter(function(v){return v.season===season;});
+                var tm=(tmdbSeasons[season] && tmdbSeasons[season].episodes) || [];
+                var numbers=[];
+                kp.forEach(function(v){if(numbers.indexOf(v.episode)<0)numbers.push(v.episode);});
+                tm.forEach(function(e){if(numbers.indexOf(e.episode_number)<0)numbers.push(e.episode_number);});
+                numbers.sort(function(a,b){return a-b;});
+                var today=new Date().toISOString().slice(0,10), focusRow=null, watchedRow=null;
+                state.text(detail.title.split(' / ')[0]+' · Сезон '+season+' · Серий: '+kp.length+(numbers.length>kp.length?' из '+numbers.length:''));
+                numbers.forEach(function(n){
+                    var v=kp.filter(function(x){return x.episode===n;})[0], ep=tmdbEpisode(season,n);
+                    var row=$('<div class="rmhd-voice rmhd-episode selector"><div class="rmhd-voice-image"><img/><em></em></div><div class="rmhd-voice-body"><div class="rmhd-voice-top"><strong></strong><small></small></div><div class="rmhd-progress"><div></div></div><div class="rmhd-voice-bottom"><span></span><b></b></div></div></div>');
+                    var img=(ep && ep.still_path && tmdbImg(ep.still_path)) || (v && v.thumbnail) || '';
+                    if(img)row.find('img').attr('src',img).on('error',function(){$(this).hide();});else row.find('img').hide();
+                    row.find('em').text(n<10?'0'+n:String(n));
+                    row.find('strong').text((ep && ep.name) || (v && v.title) || ('Серия '+n));
+                    var minutes=(ep && ep.runtime) || (v && v.duration?Math.ceil(v.duration/60):0);
+                    var info=[];if(ep && ep.vote_average)info.push('★ '+Number(ep.vote_average).toFixed(1));
+                    if(ep && ep.air_date)info.push(dateLabel(ep.air_date));
+                    row.find('.rmhd-voice-bottom span').text(info.join(' · '));
+                    if(v) {
+                        var view=timeline(v), percent=Math.max(0,Math.min(100,Number(view.percent)||0));
+                        row.find('.rmhd-progress div').css('width',percent+'%');
+                        var left=view.duration && view.time && percent>0 && percent<95?Math.ceil((view.duration-view.time)/60):0;
+                        row.find('small').text(left?'осталось '+left+' мин':(minutes?minutes+' мин':''));
+                        if(percent>0 && percent<95)watchedRow=row;
+                        row.on('hover:enter',function(){video=v;language='';renderVoices();});
+                        if(object.episode && n===Number(object.episode))focusRow=row;
+                    }
+                    else {
+                        row.addClass('rmhd-episode--soon');
+                        row.find('small').text(minutes?minutes+' мин':'');
+                        row.find('b').text(ep && ep.air_date && ep.air_date>today?'выйдет '+dateLabel(ep.air_date):'нет в KinoPub');
+                        row.on('hover:enter',function(){L.Noty.show(ep && ep.air_date && ep.air_date>today?'Серия выйдет '+dateLabel(ep.air_date):'Этой серии пока нет в KinoPub');});
+                    }
+                    rows.append(trackFocus(row));
+                });
+                var target=focusRow || watchedRow;
+                if(target)last=target[0];
+                object.episode=null;
+                activate();
+            });
+        }
         function renderVoices() {
-            rows.empty();last=false;rebuildTools();loading(false);
+            mode='voices';rows.empty();last=false;rebuildTools();loading(false);
             state.text(detail.title.split(' / ')[0]+' · '+editionLabel(detail.type)+(video.season!==null?' · Сезон '+video.season+', серия '+video.episode:'')+
                 ' · Озвучек: '+(video.audios || []).length);
             var list=currentVoices().filter(function(a){return !language || a.lang===language;});
             list.forEach(function(a){
                 var row=$('<div class="rmhd-voice selector"><div class="rmhd-voice-image"><img/><span>▶</span></div><div class="rmhd-voice-body"><div class="rmhd-voice-top"><strong></strong><small></small></div><div class="rmhd-progress"><div></div></div><div class="rmhd-voice-bottom"><span></span><b></b></div></div></div>');
-                var thumbnail=video.thumbnail || poster(card,true) || poster(card) || detail.poster;
+                var ep=tmdbEpisode(video.season,video.episode);
+                var thumbnail=(ep && ep.still_path && tmdbImg(ep.still_path)) || video.thumbnail || poster(card,true) || poster(card) || detail.poster;
                 row.find('img').attr('src',thumbnail).on('error',function(){$(this).hide();});
                 row.find('strong').text(a.label);
                 row.find('small').text(video.duration?Math.ceil(video.duration/60)+' мин':'');
@@ -2937,7 +3017,7 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                 if(object.videoIndex!=null)video=data.videos[object.videoIndex] || video;
                 if(object.season || object.episode)video=data.videos.filter(function(v){return (!object.season || v.season===Number(object.season)) && (!object.episode || v.episode===Number(object.episode));})[0] || video;
                 meta.text([data.year || year,editionLabel(data.type),qualityLabel(data.quality)].filter(Boolean).join(' · '));
-                renderVoices();
+                if(canEpisodes())renderEpisodes();else renderVoices();
             });
         }
         function renderMatches() {
@@ -2971,7 +3051,11 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
                 up:function(){if(Navigator.canmove('up'))Navigator.move('up');else L.Controller.toggle('head');},
                 down:function(){Navigator.move('down');},right:function(){Navigator.move('right');},
                 left:function(){if(Navigator.canmove('left'))Navigator.move('left');else L.Controller.toggle('menu');},
-                back:function(){L.Activity.backward();}
+                back:function(){
+                    // Из озвучек серии — назад к списку серий, а не из карточки.
+                    if(mode==='voices' && detail && video && video.season!==null && canEpisodes()){renderEpisodes();return;}
+                    L.Activity.backward();
+                }
             });L.Controller.toggle('content');
         };
         this.stop=function(){started=false;};this.pause=function(){};
@@ -3075,6 +3159,8 @@ function selectRMediaHubAudioTrack(audio,tracks,expectedCount) {
             '.rmhd-voice-body{flex:1;min-width:0}.rmhd-voice-top,.rmhd-voice-bottom{display:flex;justify-content:space-between;gap:1em;align-items:center}' +
             '.rmhd-voice-top strong{font-size:1.5em;font-weight:400;line-height:1.2}.rmhd-voice-top small{white-space:nowrap;opacity:.8}' +
             '.rmhd-voice-bottom{margin-top:.6em;font-size:.8em}.rmhd-voice-bottom b{font-weight:400;white-space:nowrap}' +
+            '.rmhd-episode .rmhd-voice-image em{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;font-style:normal;font-size:2.2em;font-weight:500;text-shadow:0 2px 8px rgba(0,0,0,.8)}' +
+            '.rmhd-episode--soon{opacity:.45}.rmhd-episode--soon .rmhd-voice-image{background:transparent}' +
             '.rmhd-progress{height:.25em;background:rgba(255,255,255,.28);margin-top:1em;border-radius:1em}.rmhd-progress div{height:100%;background:#fff;border-radius:1em}' +
             '@media(max-width:580px){.rmhd-voice-image{flex-basis:7em;height:4.7em}.rmhd-voice-top strong{font-size:1.15em}.rmhd-voice-top small{display:none}.rmhd-plot{max-height:7em}.rmhd-watch-body{padding:.5em}}'
         ).appendTo('head');
