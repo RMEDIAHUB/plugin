@@ -9,7 +9,7 @@
     let rmReleaseRequested = false;
     try { rmReleaseRequested = /[?#&]rmrelease=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_req') === '1'; } catch (e) {}
     try { if (rmReleaseRequested) sessionStorage.setItem('rmedia_release_req', '1'); } catch (e) {}
-    window.rmedia_lock_ui_version = '2026-11-07-release-btn';
+    window.rmedia_lock_ui_version = '2026-11-07-basic-own-ts';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -1805,7 +1805,17 @@
         try {
             if (typeof cfg.tariff === 'string') rmApplyTariff(cfg.tariff);
             if (cfg.app_url) { rmMoveTo(cfg.app_url); if (rmMoving) return; }
-            if (cfg.torrserver) rmApplyTorrServerPair(cfg.torrserver);
+            if (cfg.torrserver) {
+                // BASIC + свой сервер: свой — основной, общий BASIC — запасной (дополнительная ссылка).
+                // Раньше общий сервер каждую минуту на миг перезаписывал основной.
+                const own = /^http:\/\/([a-z0-9.-]+(:\d{1,5})?)\/p$/i.exec(typeof cfg.ts_plugin === 'string' ? cfg.ts_plugin : '');
+                if (own) {
+                    const shared = cfg.torrserver.main && cfg.torrserver.main !== own[1] ? cfg.torrserver.main : (cfg.torrserver.extra || '');
+                    rmApplyTorrServerPair({ main: own[1], extra: shared });
+                } else {
+                    rmApplyTorrServerPair(cfg.torrserver);
+                }
+            }
             if (cfg.filmix) rmApplySharedKey('filmix', cfg.filmix);
             if (cfg.kinopub) rmApplySharedKey('kinopub', cfg.kinopub);
             if (typeof cfg.ts_plugin === 'string') {
