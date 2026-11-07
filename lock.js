@@ -9,7 +9,7 @@
     let rmReleaseRequested = false;
     try { rmReleaseRequested = /[?#&]rmrelease=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_req') === '1'; } catch (e) {}
     try { if (rmReleaseRequested) sessionStorage.setItem('rmedia_release_req', '1'); } catch (e) {}
-    window.rmedia_lock_ui_version = '2026-11-07-server-plus';
+    window.rmedia_lock_ui_version = '2026-11-07-release-btn';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -1507,7 +1507,8 @@
         const creditVisible = isTestExpired && data.credit_available !== false &&
             Number.isFinite(creditUntil) && remoteNow(data) < creditUntil;
         const contact = remoteContact(data);
-        const signature = JSON.stringify([status, message, isTestExpired, creditVisible, contact]);
+        const showRelease = isTestExpired || status === 'pending' || status === 'blocked' || status === 'expired';
+        const signature = JSON.stringify([status, message, isTestExpired, creditVisible, contact, showRelease]);
         if (!remoteOverlay) {
             try {
                 const origin = Lampa.Controller.enabled();
@@ -1563,14 +1564,16 @@
                     : '') +
                 (creditVisible ? '<div class="rmedia-credit" style="font-size:20px;margin-top:20px">' +
                     '10€ теста можно зачесть в подписку.<br>Осталось: <span class="rmedia-credit-time"></span></div>' : '') +
-                (isTestExpired ? '<div style="font-size:18px;margin-top:26px">' +
-                    '<a class="rmedia-release selector" tabindex="0" role="button" ' +
-                    'style="display:inline-block;padding:14px 20px;border:2px solid #fff;border-radius:12px;color:#fff;font-weight:600;cursor:pointer">Вернуть обычную Лампу</a></div>' : '') +
                 '<div style="font-size:18px;opacity:.9;margin-top:26px">' +
                     '<a class="rmedia-contact selector" tabindex="0" href="' + remoteEscape(contact) + '" target="_blank" rel="noopener noreferrer" ' +
                     'style="display:inline-block;padding:14px 20px;border:2px solid #8ab4ff;border-radius:12px;color:#8ab4ff;font-weight:600;">Связаться с администратором</a>' +
                     '<div style="margin-top:12px;overflow-wrap:anywhere">' + remoteEscape(contact.replace(/^https?:\/\//, '')) + '</div>' +
                 '</div>' +
+                // Клиент может сам вернуться в обычную Лампу: после теста, при Pending,
+                // блокировке или окончании срока. Подтверждение — вторым нажатием.
+                (showRelease ? '<div style="font-size:16px;margin-top:34px">' +
+                    '<a class="rmedia-release selector" tabindex="0" role="button" ' +
+                    'style="display:inline-block;padding:12px 18px;border:2px solid rgba(255,255,255,.55);border-radius:12px;color:rgba(255,255,255,.8);font-weight:600;cursor:pointer">Вернуть обычную Лампу</a></div>' : '') +
             '</div>'
           );
           const button = remoteOverlay.find('.rmedia-contact');
