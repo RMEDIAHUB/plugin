@@ -9,7 +9,7 @@
     let rmReleaseRequested = false;
     try { rmReleaseRequested = /[?#&]rmrelease=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_req') === '1'; } catch (e) {}
     try { if (rmReleaseRequested) sessionStorage.setItem('rmedia_release_req', '1'); } catch (e) {}
-    window.rmedia_lock_ui_version = '2026-11-05-tv-archive';
+    window.rmedia_lock_ui_version = '2026-11-07-server-plus';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -1764,12 +1764,13 @@
     // Тариф из админки: ultimate (по умолчанию) или basic. При смене тарифа
     // меняется набор плагинов Лампы RMediaHub — один перезапуск.
     function rmApplyTariff(t) {
-        t = t === 'basic' ? 'basic' : 'ultimate';
+        t = (t === 'basic' || t === 'server_plus') ? t : 'ultimate';
         let prev = 'ultimate';
         try { prev = localStorage.getItem('rmedia_tariff') || 'ultimate'; } catch (e) {}
         if (prev === t) return;
         try { localStorage.setItem('rmedia_tariff', t); } catch (e) { return; }
-        try { Lampa.Noty.show(t === 'basic' ? 'Тариф BASIC — применяем настройки…' : 'Тариф ULTIMATE — применяем настройки…'); } catch (e) {}
+        const label = t === 'basic' ? 'BASIC' : t === 'server_plus' ? 'SERVER PLUS' : 'ULTIMATE';
+        try { Lampa.Noty.show('Тариф ' + label + ' — применяем настройки…'); } catch (e) {}
         setTimeout(function () { window.location.reload(); }, 2500);
     }
 
@@ -2523,12 +2524,22 @@
         return /^iptv$/i.test(action) || /^iptv$/i.test(text);
     }
 
+    function rmIsServerPlus() {
+        try { return localStorage.getItem('rmedia_tariff') === 'server_plus'; } catch (e) { return false; }
+    }
+
     function rmtvMenu() {
         try {
             const list = $('.menu .menu__list').eq(0);
             if (!list.length) return;
             let item = list.find('.menu__item[data-action="rmedia_tv"]');
             const cub = list.find('.menu__item').filter(function () { return rmtvIsCubIptv($(this)); });
+            // SERVER PLUS — тариф без ТВ: ни нашего «ТВ», ни кубовского IPTV.
+            if (rmIsServerPlus()) {
+                item.remove();
+                cub.hide();
+                return;
+            }
             if (!rmtvEnabled()) {
                 item.remove();
                 cub.show();

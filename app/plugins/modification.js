@@ -66,6 +66,13 @@
     var IS_BASIC = false;
     try { IS_BASIC = localStorage.getItem('rmedia_tariff') === 'basic'; } catch (e) {}
 
+    // SERVER PLUS = набор ULTIMATE, но без ТВ (IPTV от CUB не грузим).
+    var IS_SERVER_PLUS = false;
+    try { IS_SERVER_PLUS = localStorage.getItem('rmedia_tariff') === 'server_plus'; } catch (e) {}
+    if (IS_SERVER_PLUS) {
+        RMEDIA_PLUGINS = RMEDIA_PLUGINS.filter(function (url) { return !/\/plugin\/iptv$/.test(url); });
+    }
+
     var LOCK_URL = 'https://rmediahub.github.io/plugin/lock.js';
     var BASIC_MARK = 'rmedia_basic_plugins_v1';
 
