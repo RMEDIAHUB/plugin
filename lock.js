@@ -9,7 +9,7 @@
     let rmReleaseRequested = false;
     try { rmReleaseRequested = /[?#&]rmrelease=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_req') === '1'; } catch (e) {}
     try { if (rmReleaseRequested) sessionStorage.setItem('rmedia_release_req', '1'); } catch (e) {}
-    window.rmedia_lock_ui_version = '2026-11-07-basic-own-ts';
+    window.rmedia_lock_ui_version = '2026-11-08-android-torrclient';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -1800,7 +1800,18 @@
         } catch (e) {}
     }
 
+    // Android: всегда включаем «Встроенный клиент» TorrServer.
+    // Если он выключен, Лампа отдаёт торрент внешнему Android-приложению
+    // и клиент видит «нет плееров для воспроизведения».
+    function rmForceInternalTorrClient() {
+        try {
+            if (!window.Lampa || !Lampa.Storage || !Lampa.Platform || !Lampa.Platform.is('android')) return;
+            const v = Lampa.Storage.get('internal_torrclient', false);
+            if (v !== true && v !== 'true') Lampa.Storage.set('internal_torrclient', true);
+        } catch (e) {}
+    }
     function applyRemoteConfig(cfg) {
+        rmForceInternalTorrClient();
         if (!cfg || typeof cfg !== 'object') return;
         try {
             if (typeof cfg.tariff === 'string') rmApplyTariff(cfg.tariff);
@@ -3055,6 +3066,7 @@
 
     function init() {
         installBackCrashGuard();
+        rmForceInternalTorrClient();
         migrateLegacyPin();
         installIphoneCardLayout();
         addAdminSettings();
