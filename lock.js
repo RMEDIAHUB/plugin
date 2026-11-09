@@ -9,7 +9,7 @@
     let rmReleaseRequested = false;
     try { rmReleaseRequested = /[?#&]rmrelease=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_req') === '1'; } catch (e) {}
     try { if (rmReleaseRequested) sessionStorage.setItem('rmedia_release_req', '1'); } catch (e) {}
-    window.rmedia_lock_ui_version = '2026-11-08-android-torrclient';
+    window.rmedia_lock_ui_version = '2026-11-09-device-unbind';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -1358,6 +1358,7 @@
         if (!remoteOverlay) return;
         try { Lampa.Controller.toggle('rmedia_remote_lock'); } catch(e) {}
         let button = remoteOverlay.find('.rmedia-activate');
+        if (!button.length) button = remoteOverlay.find('.rmedia-unbind');
         if (!button.length) button = remoteOverlay.find('.rmedia-contact');
         if (button.length && button[0].focus) button[0].focus();
     }
@@ -1519,7 +1520,9 @@
             Number.isFinite(creditUntil) && remoteNow(data) < creditUntil;
         const contact = remoteContact(data);
         const showRelease = isTestExpired || status === 'pending' || status === 'blocked' || status === 'expired';
-        const signature = JSON.stringify([status, message, isTestExpired, creditVisible, contact, showRelease]);
+        const limitDevices = status === 'device_limit' && data && Array.isArray(data.devices) ? data.devices : [];
+        const signature = JSON.stringify([status, message, isTestExpired, creditVisible, contact, showRelease,
+            limitDevices.map(function (d) { return d.ref; }), data && data.can_unbind, data && data.next_unbind_at]);
         if (!remoteOverlay) {
             try {
                 const origin = Lampa.Controller.enabled();
@@ -1573,6 +1576,7 @@
                 (extraMessage
                     ? '<div style="font-size:20px;opacity:.75;margin-bottom:10px">' + remoteEscape(extraMessage) + '</div>'
                     : '') +
+                (limitDevices.length ? rmDeviceListHtml(limitDevices, data) : '') +
                 (creditVisible ? '<div class="rmedia-credit" style="font-size:20px;margin-top:20px">' +
                     '10€ теста можно зачесть в подписку.<br>Осталось: <span class="rmedia-credit-time"></span></div>' : '') +
                 '<div style="font-size:18px;opacity:.9;margin-top:26px">' +
@@ -1592,6 +1596,7 @@
               if (this.click) this.click();
           });
           rmBindReleaseButton(remoteOverlay);
+          rmBindUnbindButtons(remoteOverlay);
           focusRemoteOverlay();
         }
         if (creditVisible) {
@@ -1722,6 +1727,92 @@
     // при каждом запуске сразу отправляет туда же).
     let rmReleasing = false;
     // «Вернуть обычную Лампу» — подтверждение вторым нажатием (чтобы не нажали случайно).
+    // ===== Лимит устройств: клиент сам отвязывает одно устройство =====
+    function rmAgo(iso) {
+        const t = Date.parse(iso || '');
+        if (!Number.isFinite(t)) return '';
+        const min = Math.max(0, Math.round((Date.now() - t) / 60000));
+        if (min < 5) return 'сейчас в сети';
+        if (min < 60) return 'был ' + min + ' мин назад';
+        const h = Math.round(min / 60);
+        if (h < 24) return 'был ' + h + ' ч назад';
+        const d = Math.round(h / 24);
+        return 'был ' + d + ' дн назад';
+    }
+    function rmDeviceListHtml(list, data) {
+        const can = data && data.can_unbind !== false;
+        let next = '';
+        if (!can && data.next_unbind_at) {
+            try {
+                const dt = new Date(data.next_unbind_at);
+                next = ('0' + dt.getDate()).slice(-2) + '.' + ('0' + (dt.getMonth() + 1)).slice(-2) + ' в ' +
+                    ('0' + dt.getHours()).slice(-2) + ':' + ('0' + dt.getMinutes()).slice(-2);
+            } catch (e) {}
+        }
+        let html = '<div style="font-size:19px;margin:18px 0 10px">' +
+            (can ? 'Выберите устройство, которое больше не используете:' :
+                'Сегодня одно устройство уже отвязали. Следующее можно отвязать ' + (next ? remoteEscape(next) : 'через сутки') + ' или через администратора.') +
+            '</div><div style="display:flex;flex-direction:column;gap:10px;align-items:stretch;max-width:560px;margin:0 auto">';
+        list.forEach(function (d, i) {
+            const name = String(d.name || d.platform || ('Устройство ' + (i + 1)));
+            const plat = d.platform && d.platform !== d.name ? ' · ' + d.platform : '';
+            html += '<div class="' + (can ? 'rmedia-unbind selector' : '') + '" tabindex="0" role="button" data-ref="' + remoteEscape(d.ref) + '" ' +
+                'style="padding:12px 16px;border:2px solid rgba(255,255,255,.35);border-radius:12px;text-align:left;cursor:pointer">' +
+                '<div style="font-size:19px;font-weight:600">📺 ' + remoteEscape(name + plat) + '</div>' +
+                '<div class="rmedia-unbind-sub" style="font-size:15px;opacity:.7">' + remoteEscape(rmAgo(d.last_seen)) + (can ? ' · нажмите, чтобы отвязать' : '') + '</div>' +
+            '</div>';
+        });
+        return html + '</div>';
+    }
+    let rmUnbinding = false;
+    function rmBindUnbindButtons(root) {
+        let armedRef = '', armedAt = 0;
+        root.find('.rmedia-unbind').on('hover:enter.rmedia click.rmedia', function (e) {
+            if (e && e.preventDefault) e.preventDefault();
+            if (e && e.stopPropagation) e.stopPropagation();
+            if (rmUnbinding) return;
+            const el = $(this), ref = String(el.attr('data-ref') || '');
+            if (!ref) return;
+            if (armedRef !== ref || Date.now() - armedAt > 8000) {
+                armedRef = ref; armedAt = Date.now();
+                root.find('.rmedia-unbind').css('border-color', 'rgba(255,255,255,.35)');
+                el.css('border-color', '#ff8a8a');
+                el.find('.rmedia-unbind-sub').text('Нажмите ещё раз — устройство будет отвязано');
+                return;
+            }
+            el.find('.rmedia-unbind-sub').text('Отвязываем…');
+            rmUnbindDevice(ref);
+        });
+    }
+    async function rmUnbindDevice(ref) {
+        rmUnbinding = true;
+        try {
+            const device = detectDeviceInfo();
+            const r = await fetch(remoteApi() + '/v1/client/heartbeat?_=' + Date.now(), {
+                method: 'POST',
+                cache: 'no-store',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    id: remoteClientId(), key: remoteClientKey(), unbind: ref,
+                    install_id: device.install_id,
+                    device_name: device.device_name,
+                    platform: device.platform,
+                    user_agent: device.user_agent
+                })
+            });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const data = await r.json();
+            if (!data || !data.status) throw new Error('bad response');
+            remoteOverlaySignature = '';
+            applyRemoteStatus(data);
+            if (data.device_allowed !== false) { try { Lampa.Noty.show('Готово: старое устройство отвязано, это подключено'); } catch (e) {} }
+        } catch (e) {
+            try { Lampa.Noty.show('Не удалось отвязать. Проверьте интернет и попробуйте ещё раз.'); } catch (e2) {}
+            remoteOverlaySignature = '';
+            if (remoteData) renderRemoteStatus(remoteData);
+        } finally { rmUnbinding = false; }
+    }
+
     function rmBindReleaseButton(root) {
         let releaseArmed = 0;
         root.find('.rmedia-release').on('hover:enter.rmedia click.rmedia', function (e) {
@@ -2031,7 +2122,7 @@
         if (!r.ok) return { ok: false, reason: 'Сервер недоступен (HTTP ' + r.status + '). Повторите позже.' };
         const data = await r.json();
         if (!data || !data.id || !data.status) return { ok: false, reason: 'Некорректный ответ сервера' };
-        if (data.device_allowed === false) return { ok: false, reason: data.message || 'Достигнут лимит устройств. Обратитесь к администратору.' };
+        if (data.device_allowed === false && !data.client_key) return { ok: false, reason: data.message || 'Достигнут лимит устройств. Обратитесь к администратору.' };
         if (!data.client_key) return { ok: false, reason: 'Сервер не подтвердил код. Обновите плагин.' };
         return { ok: true, data: data };
     }
@@ -2092,7 +2183,7 @@
                 remoteSet(REMOTE_KEY_KEY, String(data.client_key));
                 delete data.client_key;
                 applyRemoteStatus(data);
-                try { Lampa.Noty.show('Устройство активировано'); } catch (e) {}
+                if (data.device_allowed !== false) { try { Lampa.Noty.show('Устройство активировано'); } catch (e) {} }
                 // Лампа RMediaHub до активации грузила только этот экран —
                 // перезапускаем, чтобы подтянулись все плагины.
                 try {
