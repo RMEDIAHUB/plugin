@@ -1697,7 +1697,8 @@
         window.rmedia_bundle_loaded = true;
         try {
             const script = document.createElement('script');
-            script.src = appUrl + 'plugins/modification.js?v=' + Math.floor(Date.now() / 9e5);
+            // С GitHub по https: у части провайдеров http-адрес rmediahub.cc подменяется заглушкой.
+            script.src = 'https://rmediahub.github.io/plugin/app/plugins/modification.js?v=' + Math.floor(Date.now() / 9e5);
             document.head.appendChild(script);
         } catch (e) {}
     }
