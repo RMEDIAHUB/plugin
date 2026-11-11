@@ -527,7 +527,7 @@
     }
 
     function settingsSessionAllowed() {
-        return unlocked || rmIsBasic() || safeSyncOpening || rmPlayerOpening ||
+        return unlocked || rmIsBasic() || safeSyncOpening || rmPlayerOpening || rmServerOpening ||
             (authorizedSettingsSession && $('body').hasClass('settings--open'));
     }
 
@@ -584,6 +584,7 @@
             }
             if (!unlocked && !rmIsBasic() && !(safeSyncOpening && String(component) === 'account') &&
                 !(rmPlayerOpening && String(component) === 'player') &&
+                !(rmServerOpening && String(component) === 'server') &&
                 !authorizedSettingsSession) {
                 askMenuPin(open);
                 return;
@@ -898,6 +899,7 @@
     function closeSettingsToContent() {
         safeSyncOpening = false;
         rmPlayerOpening = false;
+        rmServerOpening = false;
         safeSyncAccountReached = false;
         const settingsWasOpen = authorizedSettingsSession;
         authorizedSettingsSession = false;
@@ -1047,7 +1049,14 @@
     function addClientSyncHead() {
         if (syncHeadAdded || !window.Lampa || !Lampa.Head || typeof Lampa.Head.addIcon !== 'function') return;
 
-        const icon =
+        // Синхронизация нужна только тем, кто вошёл в аккаунт CUB (старые клиенты на lampa.mx).
+        // Остальным вместо неё — кнопка TorrServer: проверить скорость своего сервера.
+        let hasCub = false;
+        try { const acc = Lampa.Storage.get('account', '{}'); hasCub = !!(acc && acc.token); } catch (e) {}
+        const torr = !hasCub;
+
+        const icon = torr ?
+            '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 3h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm0 2v4h16V5H4Zm0 8h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2Zm0 2v4h16v-4H4Zm2-9h2v2H6V6Zm0 10h2v2H6v-2Zm5-10h7v2h-7V6Zm0 10h7v2h-7v-2Z"/></svg>' :
             '<svg viewBox="0 0 24 24">' +
             '<path fill="currentColor" d="M12 4a8 8 0 0 1 7.45 5.1l1.85-.62-2.58 4.3-4.32-2.55 1.95-.65A4.8 4.8 0 0 0 12 7.2a4.79 4.79 0 0 0-4.15 2.4L5.08 8A8 8 0 0 1 12 4Zm-7.45 10.9-1.85.62 2.58-4.3 4.32 2.55-1.95.65A4.8 4.8 0 0 0 12 16.8a4.79 4.79 0 0 0 4.15-2.4L18.92 16A8 8 0 0 1 12 20a8 8 0 0 1-7.45-5.1Z"/>' +
             '</svg>';
@@ -1060,12 +1069,13 @@
                 return;
             }
 
-            openSafeSync();
+            if (torr) rmOpenServerSettings();
+            else openSafeSync();
         });
 
         if (item && item.attr) {
             item.attr('data-rmedia-sync-head', '1');
-            item.attr('title', 'Синхронизация');
+            item.attr('title', torr ? 'TorrServer' : 'Синхронизация');
 
             item.off('hover:long.rmedia-admin').on('hover:long.rmedia-admin', function (e) {
                 if (e) {
@@ -1118,6 +1128,23 @@
     function rmClosePlayerSettings() {
         rmPlayerOpening = false;
         closeSettingsToContent();
+    }
+
+    let rmServerOpening = false;
+    function rmOpenServerSettings() {
+        rmServerOpening = true;
+        try {
+            Lampa.Controller.toggle('settings');
+            setTimeout(function () {
+                try {
+                    Lampa.Settings.create('server', { onBack: function () { rmServerOpening = false; closeSettingsToContent(); } });
+                    // Ссылку на сервер клиенту не показываем — только статус и тест скорости.
+                    [0, 150, 500, 1200].forEach(function (t) {
+                        setTimeout(function () { try { hideTorrPromo($('.settings__body')); } catch (e) {} }, t);
+                    });
+                } catch (e) { rmServerOpening = false; closeSettingsToContent(); }
+            }, 80);
+        } catch (e) { rmServerOpening = false; closeSettingsToContent(); }
     }
 
     function addClientPlayerHead() {
