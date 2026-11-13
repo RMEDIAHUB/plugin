@@ -152,6 +152,20 @@
         });
     }
 
+    // --- LG (webOS): «Да, выйти» ---
+    // Лампа закрывается через window.close(), но на LG после перехода на rmediahub.cc
+    // окно так не закрывается. Родная команда LG — выход на главный экран ТВ.
+    try {
+        if (/web0s|webos/i.test(navigator.userAgent || '') && !window.rmedia_webos_exit) {
+            window.rmedia_webos_exit = true;
+            var rmOrigClose = window.close;
+            window.close = function () {
+                try { if (window.PalmSystem && typeof window.PalmSystem.platformBack === 'function') { window.PalmSystem.platformBack(); return; } } catch (e) {}
+                try { return rmOrigClose.apply(window, arguments); } catch (e) {}
+            };
+        }
+    } catch (e) {}
+
     // --- Настройки RMediaHub по умолчанию (один раз на устройство, дальше клиент меняет сам) ---
     try {
         if (!localStorage.getItem('rmedia_defaults_v1')) {
