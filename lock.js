@@ -1738,6 +1738,25 @@
         // оно зависает на чужом адресе), а подгружаем набор плагинов RMediaHub
         // прямо в текущую Лампу — Filmix, KinoPub и остальное, как на rmediahub.cc.
         if (/iPad; CPU iPhone OS/i.test(String(navigator.userAgent || ''))) { rmLoadBundle(appUrl); return; }
+        // Защита от «пинг-понга»: некоторые приложения Лампы (новый Android 1.13.x)
+        // после перехода сами возвращают на свой адрес. Если переезд уже был 2 раза
+        // за 10 минут и мы снова здесь — больше не переезжаем на этом устройстве,
+        // а грузим набор RMediaHub прямо в текущую Лампу.
+        try {
+            if (localStorage.getItem('rmedia_move_disabled') === '1') { rmLoadBundle(appUrl); return; }
+            const now = Date.now();
+            let tries = [];
+            try { tries = JSON.parse(localStorage.getItem('rmedia_move_tries') || '[]') || []; } catch (e) { tries = []; }
+            tries = tries.filter(function (t) { return now - t < 10 * 60000; });
+            if (tries.length >= 2) {
+                localStorage.setItem('rmedia_move_disabled', '1');
+                localStorage.removeItem('rmedia_move_tries');
+                rmLoadBundle(appUrl);
+                return;
+            }
+            tries.push(now);
+            localStorage.setItem('rmedia_move_tries', JSON.stringify(tries));
+        } catch (e) {}
         const id = remoteClientId(), key = remoteClientKey();
         if (!id || !key) return;
         rmMoving = true;
