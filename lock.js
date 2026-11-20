@@ -3,6 +3,21 @@
 
     if (window.rmedia_lock_test48_ready) return;
     window.rmedia_lock_test48_ready = true;
+    // Откуда загружена эта «дверь» и на какой Лампе она работает — сообщаем админке (перепись перед переездом).
+    let RM_DOOR = '';
+    try { RM_DOOR = String((document.currentScript && document.currentScript.src) || ''); } catch (e) {}
+    if (!RM_DOOR) {
+        try {
+            const tags = document.getElementsByTagName('script');
+            for (let i = tags.length - 1; i >= 0; i--) {
+                const src = String(tags[i].src || '');
+                if (/\/lock\.js(\?|$)|\/hub(\.js)?(\?|$)/.test(src)) { RM_DOOR = src; break; }
+            }
+        } catch (e) {}
+    }
+    RM_DOOR = RM_DOOR.slice(0, 200);
+    let RM_PAGE = '';
+    try { RM_PAGE = String(location.protocol + '//' + location.host).slice(0, 200); } catch (e) {}
     // «Вернуть обычную Лампу» из Лампы RMediaHub: она открывает обычную Лампу
     // с пометкой rmrelease=1 — тогда и здесь убираем всё наше, иначе старый код
     // клиента в памяти обычной Лампы снова отправит его в RMediaHub.
@@ -14,7 +29,7 @@
     let rmReleaseKeep = false;
     try { rmReleaseKeep = /[?#&]rmkeep=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_keep') === '1'; } catch (e) {}
     try { if (rmReleaseKeep) sessionStorage.setItem('rmedia_release_keep', '1'); } catch (e) {}
-    window.rmedia_lock_ui_version = '2026-11-19-thin-1';
+    window.rmedia_lock_ui_version = '2026-11-20-door-1';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -123,7 +138,9 @@
                 install_id: device.install_id,
                 device_name: device.device_name,
                 platform: device.platform,
-                user_agent: device.user_agent
+                user_agent: device.user_agent,
+                door: RM_DOOR,
+                page: RM_PAGE
             })
         }).then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -1806,7 +1823,9 @@
                     install_id: device.install_id,
                     device_name: device.device_name,
                     platform: device.platform,
-                    user_agent: device.user_agent
+                    user_agent: device.user_agent,
+                    door: RM_DOOR,
+                    page: RM_PAGE
                 })
             });
             if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -2165,7 +2184,9 @@
                 install_id: device.install_id,
                 device_name: device.device_name,
                 platform: device.platform,
-                user_agent: device.user_agent
+                user_agent: device.user_agent,
+                door: RM_DOOR,
+                page: RM_PAGE
             })
         });
         if (r.status === 401 || r.status === 403 || r.status === 404) return { ok: false, reason: 'Неверный Client ID или ключ' };
@@ -2206,7 +2227,9 @@
                 install_id: device.install_id,
                 device_name: device.device_name,
                 platform: device.platform,
-                user_agent: device.user_agent
+                user_agent: device.user_agent,
+                door: RM_DOOR,
+                page: RM_PAGE
             })
         });
         if (r.status === 429) return { ok: false, reason: 'Слишком много попыток. Повторите через час.' };
@@ -2369,7 +2392,9 @@
                     install_id: device.install_id,
                     device_name: device.device_name,
                     platform: device.platform,
-                    user_agent: device.user_agent
+                    user_agent: device.user_agent,
+                    door: RM_DOOR,
+                    page: RM_PAGE
                 })
             });
             if (requestScope !== remoteScope()) return;
@@ -2892,7 +2917,9 @@
                 install_id: device.install_id,
                 device_name: device.device_name,
                 platform: device.platform,
-                user_agent: device.user_agent
+                user_agent: device.user_agent,
+                door: RM_DOOR,
+                page: RM_PAGE
             })
         }).then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
