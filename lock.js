@@ -29,7 +29,7 @@
     let rmReleaseKeep = false;
     try { rmReleaseKeep = /[?#&]rmkeep=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_keep') === '1'; } catch (e) {}
     try { if (rmReleaseKeep) sessionStorage.setItem('rmedia_release_keep', '1'); } catch (e) {}
-    window.rmedia_lock_ui_version = '2026-11-20-keepid-1';
+    window.rmedia_lock_ui_version = '2026-11-20-sync-keepid';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -2969,6 +2969,206 @@
     // ===== /СВОИ ПЛАГИНЫ С СЕРВЕРА =====
 
 
+
+    // ===== СИНХРОНИЗАЦИЯ МЕЖДУ УСТРОЙСТВАМИ =====
+    // История, закладки и «где остановился» — общие для всех устройств одного клиента.
+    // Хранятся на сервере RMediaHub. Каждое устройство раз в 2 минуты (и вскоре после
+    // изменений) сверяется: забирает чужие изменения, отдаёт свои.
+    // Удаления не воскресают: устройство помнит, какие закладки были при прошлой сверке
+    // (только номера — это мало места), и удалённое у себя убирает и с сервера.
+    // У клиентов, вошедших в CUB, синхронизирует сам CUB — там мы ничего не делаем.
+    const RM_SYNC_BASE_KEY = 'rmedia_sync_base';
+    const RM_SYNC_EVERY_MS = 2 * 60 * 1000;
+    const RM_SYNC_SOON_MS = 20 * 1000;
+    const RM_SYNC_VIEW_MAX = 2000;
+    const RM_SYNC_CATS = ['like', 'wath', 'book', 'history', 'look', 'viewed', 'scheduled', 'continued', 'thrown'];
+    let rmSyncBusy = false, rmSyncApplying = false, rmSyncSoonTimer = null, rmSyncLastAt = 0;
+    const rmSyncStat = { answer: 'ещё не сверялись', at: 0 };
+
+    function rmSyncCubActive() {
+        try {
+            const A = Lampa.Account;
+            if (!A) return false;
+            if (A.Permit) return !!A.Permit.sync;
+            return typeof A.working === 'function' && !!A.working(); // старые сборки Лампы
+        } catch (e) { return false; }
+    }
+    function rmSyncHash(str) {
+        let h = 2166136261;
+        for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+        return (h >>> 0).toString(36) + ':' + str.length;
+    }
+    function rmSyncEmpty() {
+        const e = { favorite: {}, file_view: {} };
+        RM_SYNC_CATS.forEach(function (c) { e.favorite[c] = []; });
+        e.favorite.card = [];
+        return e;
+    }
+    function rmSyncObj(v) { return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; }
+    function rmSyncTrim(data) {
+        const stamp = function (v) { return v && typeof v === 'object' ? (Number(v.updated) || 0) : 0; };
+        let keys = Object.keys(data.file_view);
+        if (keys.length <= RM_SYNC_VIEW_MAX) return data;
+        keys.sort(function (x, y) { return stamp(data.file_view[y]) - stamp(data.file_view[x]); });
+        const trimmed = {};
+        keys.slice(0, RM_SYNC_VIEW_MAX).forEach(function (k) { trimmed[k] = data.file_view[k]; });
+        return { favorite: data.favorite, file_view: trimmed };
+    }
+    function rmSyncReadLocal() {
+        const fav = rmSyncObj(Lampa.Storage.get('favorite', '{}'));
+        const view = rmSyncObj(Lampa.Storage.get('file_view', '{}'));
+        // Тот же порядок полей, что даёт слияние: иначе одинаковые данные выглядели бы разными.
+        const out = { favorite: {}, file_view: view };
+        RM_SYNC_CATS.forEach(function (c) { out.favorite[c] = Array.isArray(fav[c]) ? fav[c] : []; });
+        out.favorite.card = Array.isArray(fav.card) ? fav.card : [];
+        return out;
+    }
+    function rmSyncIds(fav) {
+        const ids = {};
+        RM_SYNC_CATS.forEach(function (c) { ids[c] = (fav && Array.isArray(fav[c]) ? fav[c] : []).map(String); });
+        return ids;
+    }
+    function rmSyncReadBase() {
+        try {
+            // Lampa.Storage сам превращает сохранённый текст обратно в объект.
+            const raw = remoteGet(RM_SYNC_BASE_KEY, '');
+            const b = raw && typeof raw === 'object' ? raw : JSON.parse(remoteClean(raw) || 'null');
+            if (b && typeof b.rev === 'number' && b.id === remoteClientId()) return b;
+        } catch (e) {}
+        return null;
+    }
+    function rmSyncWriteBase(rev, data) {
+        try {
+            remoteSet(RM_SYNC_BASE_KEY, JSON.stringify({ id: remoteClientId(), rev: rev, ids: rmSyncIds(data.favorite), hash: rmSyncHash(JSON.stringify(data)) }));
+        } catch (e) {}
+    }
+    // Слияние: что добавлено у себя с прошлой сверки — добавляем; что удалено у себя — убираем;
+    // остальное берём с сервера. Отметки «где остановился»: по каждому файлу — более свежая.
+    function rmSyncMerge(base, local, remote) {
+        const bIds = base ? base.ids : null;
+        const rf = rmSyncObj(remote && remote.favorite), lf = local.favorite;
+        const fav = {};
+        RM_SYNC_CATS.forEach(function (c) {
+            const L = lf[c].map(String), B = bIds && Array.isArray(bIds[c]) ? bIds[c] : [];
+            const R = Array.isArray(rf[c]) ? rf[c] : [];
+            const removed = {}, rset = {};
+            B.forEach(function (id) { if (L.indexOf(id) < 0) removed[id] = 1; });
+            const keep = R.filter(function (id) { const k = String(id); if (removed[k] || rset[k]) return false; rset[k] = 1; return true; });
+            const added = lf[c].filter(function (id) { const k = String(id); return B.indexOf(k) < 0 && !rset[k]; });
+            fav[c] = added.concat(keep);
+        });
+        const used = {};
+        RM_SYNC_CATS.forEach(function (c) { fav[c].forEach(function (id) { used[String(id)] = 1; }); });
+        const cards = {}, order = [];
+        // Сначала карточки с сервера (их порядок и вид), потом новые свои — иначе устройства
+        // гоняли бы туда-сюда одно и то же в разном порядке.
+        (Array.isArray(rf.card) ? rf.card : []).concat(lf.card).forEach(function (card) {
+            if (!card || card.id === undefined) return;
+            const k = String(card.id);
+            if (!used[k] || cards[k]) return;
+            cards[k] = card; order.push(card);
+        });
+        fav.card = order;
+        const view = {}, rv = rmSyncObj(remote && remote.file_view), lv = local.file_view;
+        const stamp = function (v) { return v && typeof v === 'object' ? (Number(v.updated) || 0) : 0; };
+        Object.keys(rv).forEach(function (k) { view[k] = rv[k]; });
+        Object.keys(lv).forEach(function (k) {
+            const a = lv[k], b = view[k];
+            if (!b) { view[k] = a; return; }
+            const sa = stamp(a), sb = stamp(b);
+            if (sa > sb || (sa === sb && (Number(a && a.time) || 0) > (Number(b && b.time) || 0))) view[k] = a;
+        });
+        return rmSyncTrim({ favorite: fav, file_view: view });
+    }
+    function rmSyncApply(local, merged) {
+        rmSyncApplying = true;
+        try {
+            const lfav = JSON.stringify(local.favorite), mfav = JSON.stringify(merged.favorite);
+            if (lfav !== mfav) {
+                const full = rmSyncObj(Lampa.Storage.get('favorite', '{}'));
+                Object.keys(merged.favorite).forEach(function (k) { full[k] = merged.favorite[k]; });
+                Lampa.Storage.set('favorite', full);
+                try { if (Lampa.Favorite && typeof Lampa.Favorite.read === 'function') Lampa.Favorite.read(); } catch (e) {}
+            }
+            if (JSON.stringify(local.file_view) !== JSON.stringify(merged.file_view)) Lampa.Storage.set('file_view', merged.file_view);
+        } catch (e) {
+            console.warn('[RMEDIA sync] apply failed', e);
+        } finally { rmSyncApplying = false; }
+    }
+    async function rmSyncCall(sync) {
+        const device = detectDeviceInfo();
+        const r = await fetch(remoteApi() + '/v1/client/heartbeat?_=' + Date.now(), {
+            method: 'POST', cache: 'no-store', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                id: remoteClientId(), key: remoteClientKey(), want: 'sync', sync: sync,
+                install_id: device.install_id, device_name: device.device_name,
+                platform: device.platform, user_agent: device.user_agent, door: RM_DOOR, page: RM_PAGE
+            })
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        if (!data || !data.sync) throw new Error(data && data.status !== 'active' ? 'нет доступа' : 'сервер без синхронизации');
+        return data.sync;
+    }
+    async function rmSyncRun() {
+        if (rmSyncBusy) return;
+        if (!remoteClientId() || !remoteClientKey()) return;
+        if (!remoteData || remoteData.status !== 'active') return;
+        if (rmSyncCubActive()) { rmSyncStat.answer = 'через CUB'; return; }
+        rmSyncBusy = true; rmSyncLastAt = Date.now();
+        try {
+            let base = rmSyncReadBase();
+            let local = rmSyncTrim(rmSyncReadLocal());
+            let ans = await rmSyncCall({ rev: base ? base.rev : -1 });
+            for (let attempt = 0; attempt < 3; attempt++) {
+                if (!ans || ans.ok === false && !ans.conflict) throw new Error(ans && ans.error || 'ошибка');
+                let target;
+                if (ans.unchanged) {
+                    if (base && rmSyncHash(JSON.stringify(local)) === base.hash) { rmSyncStat.answer = 'всё совпадает'; return; }
+                    target = local;
+                } else {
+                    target = rmSyncMerge(base, local, ans.data || {});
+                    rmSyncApply(local, target);
+                    local = rmSyncTrim(rmSyncReadLocal());
+                    const remoteSame = JSON.stringify(rmSyncMerge(null, rmSyncEmpty(), ans.data || {})) === JSON.stringify(target);
+                    if (remoteSame) { rmSyncWriteBase(ans.rev, target); rmSyncStat.answer = 'получено с сервера'; return; }
+                }
+                const empty = !Object.keys(target.file_view).length && RM_SYNC_CATS.every(function (c) { return !target.favorite[c].length; });
+                if (empty && (ans.rev || 0) === 0) { rmSyncWriteBase(0, target); rmSyncStat.answer = 'пока нечего синхронизировать'; return; }
+                const put = await rmSyncCall({ base: ans.rev, data: target });
+                if (put && put.ok) { rmSyncWriteBase(put.rev, target); rmSyncStat.answer = 'отправлено'; return; }
+                if (put && put.conflict) { base = rmSyncReadBase(); local = rmSyncTrim(rmSyncReadLocal()); ans = put; ans.unchanged = false; continue; }
+                throw new Error(put && put.error || 'ошибка записи');
+            }
+        } catch (e) {
+            rmSyncStat.answer = 'не вышло: ' + (e && e.message || e);
+        } finally {
+            rmSyncBusy = false; rmSyncStat.at = Date.now();
+        }
+    }
+    function rmSyncSoon(ms) {
+        if (rmSyncSoonTimer) return;
+        rmSyncSoonTimer = setTimeout(function () { rmSyncSoonTimer = null; rmSyncRun(); }, ms || RM_SYNC_SOON_MS);
+    }
+    function rmSyncInit() {
+        if (window.rmedia_sync_started) return;
+        window.rmedia_sync_started = true;
+        window.rmedia_sync_stat = rmSyncStat;
+        try {
+            Lampa.Storage.listener.follow('change', function (e) {
+                if (rmSyncApplying || !e) return;
+                if (e.name === 'favorite' || e.name === 'file_view') rmSyncSoon();
+            });
+        } catch (e) {}
+        try {
+            Lampa.Player.listener.follow('destroy', function () { rmSyncSoon(3000); });
+        } catch (e) {}
+        setTimeout(rmSyncRun, 5000);
+        setInterval(function () { if (Date.now() - rmSyncLastAt >= RM_SYNC_EVERY_MS - 1000) rmSyncRun(); }, 30 * 1000);
+    }
+    window.rmediaSyncNow = rmSyncRun;
+    // ===== /СИНХРОНИЗАЦИЯ =====
+
     function init() {
         installBackCrashGuard();
         rmForceInternalTorrClient();
@@ -2983,6 +3183,7 @@
         hideClientHeadExtras();
         initRemoteControl();
         rmBundleInit();
+        rmSyncInit();
         addClientSyncMenu();
         addClientSyncHead();
         addClientPlayerHead();
