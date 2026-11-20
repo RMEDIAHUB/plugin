@@ -18,6 +18,10 @@
                 if (/^RM-[0-9A-F]{8}$/.test(id) && /^[A-Za-z0-9_-]{10,64}$/.test(key)) {
                     localStorage.setItem('rmedia_remote_client_id', id);
                     localStorage.setItem('rmedia_remote_client_key', key);
+                    // Тот же ID установки, что был на прежнем адресе: устройство не задваивается.
+                    var inst = (location.hash || '').match(/rminst=([^&]+)/);
+                    inst = inst ? decodeURIComponent(inst[1]) : '';
+                    if (/^DEV-[A-Z0-9]{6,24}$/.test(inst) && !localStorage.getItem('rmedia_install_id')) localStorage.setItem('rmedia_install_id', inst);
                     // Не спрашивать язык после переезда.
                     if (!localStorage.getItem('language')) localStorage.setItem('language', 'ru');
                 }
