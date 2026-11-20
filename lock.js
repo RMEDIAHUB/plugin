@@ -29,7 +29,7 @@
     let rmReleaseKeep = false;
     try { rmReleaseKeep = /[?#&]rmkeep=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_keep') === '1'; } catch (e) {}
     try { if (rmReleaseKeep) sessionStorage.setItem('rmedia_release_keep', '1'); } catch (e) {}
-    window.rmedia_lock_ui_version = '2026-11-20-door-1';
+    window.rmedia_lock_ui_version = '2026-11-20-keepid-1';
 
     const PIN_KEY = 'rmedia_lock_pin';
     const MENU_PIN_KEY = 'rmedia_menu_pin';
@@ -1742,7 +1742,12 @@
         try { Lampa.Noty.show('Переходим в RMediaHub…'); } catch (e) {}
         // Ключ клиента — во фрагменте (#), он не уходит на сервер и в логи.
         setTimeout(function () {
-            window.location.href = appUrl + '#rmid=' + encodeURIComponent(id) + '&rmkey=' + encodeURIComponent(key);
+            // ID установки тоже переносим: иначе на новом адресе Лампа придумает новый,
+            // и в админке это же устройство появится второй раз (занимает место в лимите).
+            let inst = '';
+            try { inst = detectDeviceInfo().install_id || ''; } catch (e) {}
+            window.location.href = appUrl + '#rmid=' + encodeURIComponent(id) + '&rmkey=' + encodeURIComponent(key) +
+                (inst ? '&rminst=' + encodeURIComponent(inst) : '');
         }, 1500);
     }
 
