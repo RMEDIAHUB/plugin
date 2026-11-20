@@ -1,0 +1,3004 @@
+(function () {
+    'use strict';
+
+    if (window.rmedia_lock_test48_ready) return;
+    window.rmedia_lock_test48_ready = true;
+    // «Вернуть обычную Лампу» из Лампы RMediaHub: она открывает обычную Лампу
+    // с пометкой rmrelease=1 — тогда и здесь убираем всё наше, иначе старый код
+    // клиента в памяти обычной Лампы снова отправит его в RMediaHub.
+    let rmReleaseRequested = false;
+    try { rmReleaseRequested = /[?#&]rmrelease=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_req') === '1'; } catch (e) {}
+    try { if (rmReleaseRequested) sessionStorage.setItem('rmedia_release_req', '1'); } catch (e) {}
+    // rmkeep=1 — клиент был на «только ТВ» (ТЕСТ ТВ) в своей Лампе: убираем только наше,
+    // его собственные расширения не трогаем.
+    let rmReleaseKeep = false;
+    try { rmReleaseKeep = /[?#&]rmkeep=1/.test(String(location.href || '')) || sessionStorage.getItem('rmedia_release_keep') === '1'; } catch (e) {}
+    try { if (rmReleaseKeep) sessionStorage.setItem('rmedia_release_keep', '1'); } catch (e) {}
+    window.rmedia_lock_ui_version = '2026-11-19-thin-1';
+
+    const PIN_KEY = 'rmedia_lock_pin';
+    const MENU_PIN_KEY = 'rmedia_menu_pin';
+    const ENABLED_KEY = 'rmedia_lock_enabled';
+    const SECRET_TAPS = 5;
+    const SECRET_WINDOW_MS = 2200;
+
+    let taps = [];
+    let unlocked = false;
+    let safeSyncOpening = false;
+    let safeSyncAccountReached = false;
+    let syncButtonAdded = false;
+    let syncHeadAdded = false;
+    let extensionGateBound = false;
+    let protectedComponentsBound = false;
+    let mobileBackBound = false;
+    let menuPinBusy = false;
+    let remoteUpPresses = [];
+    let suppressNextSyncEnter = false;
+    let clientMenuRegistered = false;
+    let authorizedSettingsSession = false;
+    let settingsOpenPermit = false;
+    let protectedComponentPermit = '';
+    let settingsCaptureBound = false;
+    let pinDialogOpen = false;
+
+    function storageGet(name, fallback) {
+        try {
+            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function') {
+                return Lampa.Storage.get(name, fallback);
+            }
+        } catch (e) {}
+
+        try {
+            const value = localStorage.getItem(name);
+            return value === null ? fallback : value;
+        } catch (e) {
+            return fallback;
+        }
+    }
+
+    // Тариф BASIC (приходит из админки): Лампа открыта — без PIN и без скрытия.
+    // Закрыт только служебный раздел RMEDIA Lock.
+    function rmIsBasic() {
+        try { return localStorage.getItem('rmedia_tariff') === 'basic'; } catch (e) { return false; }
+    }
+
+    function isEnabled() {
+        if (rmIsBasic()) return false;
+        return String(storageGet(ENABLED_KEY, 'true')) !== 'false';
+    }
+
+    // ===== ADMIN PIN v3 =====
+    // PIN настроек проверяет только сервер. В плагине нет ни самого PIN,
+    // ни способа его вычислить: Лампа отправляет введённые цифры и получает «верно / неверно».
+    const PIN_HASH_KEY = 'rmedia_lock_pin_hash';
+    const PIN_SALT_KEY = 'rmedia_lock_pin_salt';
+    const REMOTE_PIN = { remote: true };
+
+    function storageSetLocal(name, value) {
+        try { if (window.Lampa && Lampa.Storage) { Lampa.Storage.set(name, value); return; } } catch (e) {}
+        try { localStorage.setItem(name, value); } catch (e) {}
+    }
+
+    function clearLocalPins() {
+        // Раньше PIN хранился или считался на самом устройстве. Стираем эти следы.
+        [PIN_KEY, PIN_HASH_KEY, PIN_SALT_KEY].forEach(function (name) {
+            try { if (String(storageGet(name, '') || '')) storageSetLocal(name, ''); } catch (e) {}
+        });
+    }
+
+    function getPin() {
+        return REMOTE_PIN;
+    }
+
+    // done(ok, message): ok — сервер подтвердил PIN; message — что показать, если нет.
+    function remotePinCheck(value, done) {
+        const pin = String(value || '').trim();
+        let finished = false;
+        function finish(ok, message) {
+            if (finished) return;
+            finished = true;
+            try { done(!!ok, message || 'Неверный PIN'); } catch (e) {}
+        }
+        if (!/^\d{4,8}$/.test(pin)) { finish(false); return; }
+        let id = '', key = '', url = '', device = null;
+        try {
+            id = remoteClientId();
+            key = remoteClientKey();
+            url = remoteApi() + '/v1/client/heartbeat?_=' + Date.now();
+            device = detectDeviceInfo();
+        } catch (e) {}
+        if (!id || !key || !url || !device) { finish(false, 'PIN проверить не удалось: устройство не активировано'); return; }
+        const offline = 'Нет связи с сервером, PIN проверить не удалось';
+        const timer = setTimeout(function () { finish(false, offline); }, 12000);
+        try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Проверяю PIN…'); } catch (e) {}
+        fetch(url, {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+                id: id,
+                key: key,
+                want: 'pin',
+                pin: pin,
+                install_id: device.install_id,
+                device_name: device.device_name,
+                platform: device.platform,
+                user_agent: device.user_agent
+            })
+        }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        }).then(function (data) {
+            clearTimeout(timer);
+            if (data && data.pin_ok === true) { finish(true); return; }
+            const wait = Number(data && data.pin_wait) || 0;
+            if (wait > 0) finish(false, 'Слишком много попыток. Повторите через ' + Math.max(1, Math.ceil(wait / 60)) + ' мин.');
+            else if (data && data.pin_ok === false) finish(false, 'Неверный PIN');
+            else finish(false, offline);
+        }).catch(function () {
+            clearTimeout(timer);
+            finish(false, offline);
+        });
+    }
+    // ===== /ADMIN PIN v3 =====
+
+    function getMenuPin() {
+        let pin = String(storageGet(MENU_PIN_KEY, '1111') || '1111').trim();
+        if (!/^\d{4,8}$/.test(pin)) pin = '1111';
+        return pin;
+    }
+
+    function restrictedSelectors() {
+        return [
+            '.menu__item[data-action="settings"]',
+            '.menu__item[data-action="about"]',
+            '.menu__item[data-action="console"]',
+            '.menu__item[data-action="edit"]',
+            '.open--extensions',
+            '.open--plugins',
+            '.open--profile',
+            '.open--console',
+            '.open--terminal',
+            '.head__action[data-action="console"]',
+            '.head__action[data-action="terminal"]',
+            '.settings--shortcut',
+            '.navigation-bar__item[data-action="settings"]'
+        ].join(',');
+    }
+
+    function hideRestrictedUI() {
+        if (!isEnabled() || unlocked) return;
+        $(restrictedSelectors()).hide();
+    }
+
+    function showRestrictedUI() {
+        $(restrictedSelectors()).show();
+    }
+
+    function hideTorrPromo(body) {
+        if (!body || !body.length) return;
+
+        const promoLeafs = body.find('*').filter(function () {
+            const el = $(this);
+            let own = '';
+
+            el.contents().each(function () {
+                if (this.nodeType === 3) own += this.nodeValue || '';
+            });
+
+            return /tsarea\.tv/i.test(own) || /аренда\s+TorrServer/i.test(own);
+        });
+
+        promoLeafs.each(function () {
+            const leaf = $(this);
+            leaf.hide();
+
+            const parent = leaf.parent();
+
+            if (parent.length) {
+                parent.find('img, canvas, .qrcode, .qr-code, .ad-server__qr').hide();
+
+                const cls = String(parent.attr('class') || '');
+                const safeParent =
+                    !/settings__body|settings-component|settings__content|scroll|ad-server\b/.test(cls) &&
+                    parent.children().length <= 6;
+
+                if (safeParent && /tsarea\.tv/i.test(parent.text() || '')) {
+                    parent.hide();
+                }
+            }
+        });
+    }
+
+    function lockNow() {
+        unlocked = false;
+        hideRestrictedUI();
+
+        try {
+            if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('RMEDIA: клиентский режим');
+        } catch (e) {}
+    }
+
+    function unlockNow() {
+        unlocked = true;
+        showRestrictedUI();
+
+        /*
+         * Settings/Profile icons were hidden while Head collection was built.
+         * On Android simply showing them is not enough: Navigator still uses
+         * the old collection and skips Settings. Re-toggle Head so Lampa
+         * rebuilds collectionSet() from currently visible selectors.
+         */
+        setTimeout(function () {
+            try {
+                const enabled = Lampa.Controller && Lampa.Controller.enabled
+                    ? Lampa.Controller.enabled()
+                    : null;
+
+                if (enabled && enabled.name === 'head' &&
+                    Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                    Lampa.Controller.toggle('head');
+                }
+            } catch (e) {}
+        }, 80);
+
+        try {
+            // Заодно администратору: откуда на этом устройстве взялись наши плагины.
+            let report = '';
+            try { report = rmBundleReport(); } catch (e) {}
+            if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('RMEDIA: админ-режим до перезапуска' + (report ? '. ' + report : ''));
+        } catch (e) {}
+    }
+
+    function denyPinAndExit() {
+        unlocked = false;
+        safeSyncOpening = false;
+        safeSyncAccountReached = false;
+
+        try {
+            hideRestrictedUI();
+        } catch (e) {}
+
+        try {
+            // Закрываем любые Settings/Select/Modal состояния,
+            // чтобы после неверного PIN Back не мог показать админ-меню.
+            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                Lampa.Controller.toggle('content');
+            }
+        } catch (e) {}
+
+        setTimeout(function () {
+            try {
+                $('body').removeClass('settings--open selectbox--open');
+                hideRestrictedUI();
+            } catch (e) {}
+        }, 50);
+
+        try {
+            if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Неверный PIN');
+        } catch (e) {}
+    }
+
+    // Аварийный выход: если Лампа после отмены PIN оказалась в «полуоткрытом»
+    // экране (настройки/расширения уже закрыты, а управление осталось там),
+    // возвращаем пульт на главный экран вместо зелёного окна ошибки.
+    let rawControllerToggle = null;
+    function safeHome() {
+        try { $('body').removeClass('settings--open selectbox--open'); } catch (e) {}
+        const raw = rawControllerToggle || (window.Lampa && Lampa.Controller && Lampa.Controller.toggle);
+        for (const name of ['content', 'head']) {
+            try { raw.call(Lampa.Controller, name); return true; } catch (e) {}
+        }
+        return false;
+    }
+
+    function originStillOpen(name) {
+        name = String(name || '');
+        if (!name) return false;
+        if (/^(settings|settings_component|extensions|extension|plugins|select|selectbox|modal|keybord)$/i.test(name)) {
+            // Эти экраны после отмены PIN уже закрыты — возвращаться в них нельзя.
+            // В настройки возвращаемся как раньше (ошибка там теперь ловится).
+            if (/^settings/.test(name)) return true;
+            return false;
+        }
+        return true;
+    }
+
+    function pinMatches(expected, value) {
+        if (expected === REMOTE_PIN) return false; // такой PIN знает только сервер
+        if (typeof expected === 'function') return !!expected(value);
+        return String(value || '').trim() === String(expected);
+    }
+
+    // PIN администратора спрашиваем у сервера, PIN меню сверяем на месте.
+    function checkPin(expected, value, done) {
+        if (expected === REMOTE_PIN) remotePinCheck(value, done);
+        else done(pinMatches(expected, value), 'Неверный PIN');
+    }
+
+    function askSpecificPin(expected, title, onSuccess, wrongMode, onDone) {
+        // Native TV Enter does not bubble. Keep one PIN dialog for all entry
+        // paths, including a click followed by Lampa's synthetic Enter.
+        if (pinDialogOpen) {
+            if (typeof onDone === 'function') onDone();
+            return;
+        }
+        pinDialogOpen = true;
+        let originController = null;
+        try {
+            const enabled = Lampa.Controller && Lampa.Controller.enabled
+                ? Lampa.Controller.enabled() : null;
+            originController = enabled && enabled.name || null;
+        } catch (e) {}
+
+        let finished = false;
+        let submitted = false;
+        let cancelled = false;
+        function finishOnce() {
+            if (finished) return;
+            finished = true;
+            pinDialogOpen = false;
+            try { if (typeof onDone === 'function') onDone(); } catch (e) {}
+        }
+        function restoreOrigin(callback) {
+            try {
+                if (originController && Lampa.Controller && Lampa.Controller.toggle) {
+                    // A PIN keyboard temporarily hides the Settings layer.
+                    // Returning to the already authorised list is not a new
+                    // gear activation and must not ask for the menu PIN again.
+                    if (originController === 'settings' && authorizedSettingsSession) {
+                        settingsOpenPermit = true;
+                    }
+                    if (originStillOpen(originController)) Lampa.Controller.toggle(originController);
+                    else safeHome();
+                } else {
+                    safeHome();
+                }
+            } catch (e) { safeHome(); }
+            setTimeout(callback, 80);
+        }
+        function notifyWrong(message) {
+            try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show(message || 'Неверный PIN'); } catch (e) {}
+        }
+        if (window.Lampa && Lampa.Input && typeof Lampa.Input.edit === 'function') {
+            try {
+                const keyboard = Lampa.Input.edit({
+                    title: title || 'RMEDIA PIN', value: '', free: true,
+                    nosave: true, nomic: true, password: true
+                }, function (value) {
+                    if (submitted) return;
+                    submitted = true;
+                    restoreOrigin(function () {
+                        function settle(matched, message) {
+                            const ok = !cancelled && matched;
+                            finishOnce();
+                            if (ok) onSuccess();
+                            else {
+                                if (wrongMode !== 'menu') {
+                                    unlocked = false;
+                                    hideRestrictedUI();
+                                }
+                                if (!cancelled) notifyWrong(message);
+                            }
+                        }
+                        if (cancelled) settle(false);
+                        else checkPin(expected, value, settle);
+                    });
+                });
+                // Lampa.Input calls the same callback on Enter and Back.
+                // Its keyboard event is sent synchronously; the delayed
+                // result above can therefore reject Back even with a valid PIN.
+                if (keyboard && keyboard.listener && keyboard.listener.follow) {
+                    keyboard.listener.follow('back', function () {
+                        cancelled = true;
+                        if (!submitted) {
+                            submitted = true;
+                            restoreOrigin(finishOnce);
+                        }
+                    });
+                }
+            } catch (e) {
+                finishOnce();
+                try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Не удалось открыть ввод PIN'); } catch (e2) {}
+            }
+            return;
+        }
+        const entered = window.prompt(title || 'RMEDIA PIN');
+        if (entered === null) { finishOnce(); return; }
+        checkPin(expected, entered, function (matched, message) {
+            finishOnce();
+            if (matched) onSuccess();
+            else notifyWrong(message);
+        });
+    }
+
+    function askPin(onSuccess) {
+        askSpecificPin(getPin(), 'RMEDIA ADMIN PIN', onSuccess, 'admin');
+    }
+
+    function askMenuPin(onSuccess) {
+        // Chrome/desktop may emit both Lampa hover:enter and native click
+        // for the same activation. Allow only one menu PIN dialog at a time.
+        if (menuPinBusy) return;
+
+        menuPinBusy = true;
+
+        askSpecificPin(
+            getMenuPin(),
+            'PIN меню',
+            function () {
+                menuPinBusy = false;
+                onSuccess();
+            },
+            'menu',
+            function () {
+                menuPinBusy = false;
+            }
+        );
+    }
+
+    function secretTap() {
+        const now = Date.now();
+        taps.push(now);
+        taps = taps.filter(t => now - t <= SECRET_WINDOW_MS);
+
+        if (taps.length >= SECRET_TAPS) {
+            taps = [];
+
+            if (unlocked) lockNow();
+            else askPin(unlockNow);
+        }
+    }
+
+    function bindSecretGesture() {
+        function attach() {
+            const candidates = $('.head__title, .head__time, .time, .head__time-now, .head__clock');
+
+            candidates.each(function () {
+                const el = $(this);
+
+                if (el.data('rmedia-lock-bound')) return;
+                el.data('rmedia-lock-bound', true);
+                el.on('click.rmedia-lock', secretTap);
+            });
+        }
+
+        attach();
+
+        // Экран меняется десятки раз в секунду (листание, подгрузка карточек).
+        // Проверяем сразу при первом изменении, а дальше не чаще одного раза в 150 мс —
+        // так защита срабатывает так же быстро, но слабый телевизор не захлёбывается.
+        function sweep() {
+            attach();
+            hideRestrictedUI();
+            hideKinoPubMenu();
+            bindExtensionsGate();
+        }
+        let sweepWait = false;
+        let sweepAgain = false;
+        const observer = new MutationObserver(function () {
+            if (sweepWait) { sweepAgain = true; return; }
+            sweepWait = true;
+            sweep();
+            setTimeout(function () {
+                sweepWait = false;
+                if (sweepAgain) { sweepAgain = false; sweep(); }
+            }, 150);
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    function settingsSessionAllowed() {
+        return unlocked || rmIsBasic() || safeSyncOpening || rmPlayerOpening || rmServerOpening ||
+            (authorizedSettingsSession && $('body').hasClass('settings--open'));
+    }
+
+    function openAuthorizedSettings() {
+        authorizedSettingsSession = true;
+        settingsOpenPermit = true;
+        showRestrictedUI();
+        try { Lampa.Controller.toggle('settings'); }
+        catch (e) {
+            authorizedSettingsSession = false;
+            hideRestrictedUI();
+        } finally { settingsOpenPermit = false; }
+    }
+
+    function isKinoPubSettings(component, item) {
+        const name = String(component || '').toLowerCase();
+        const title = item && item.length ? String(item.text() || '').toLowerCase() : '';
+        return name === 'rmediahub_kinopub' ||
+            (/rmediahub|rmedia/.test(name + ' ' + title) && /kino[\s._-]*pub|кинопаб|кинопуб/.test(name + ' ' + title));
+    }
+
+    function guardedSettingsCreate(original) {
+        if (original.__rmedia_settings_create_guard) return original;
+        const guarded = function (component) {
+            const context = this;
+            const args = arguments;
+            let item = $();
+            try {
+                item = Lampa.Settings.main().render().find('.settings-folder').filter(function () {
+                    return String($(this).attr('data-component')) === String(component);
+                }).first();
+            } catch (e) {}
+            const kino = isKinoPubSettings(component, item);
+            const admin = rmIsBasic() ? String(component) === 'rmedia_lock' :
+                (kino || /^(plugins|rmedia_lock)$|filmix|pirat/i.test(String(component)) ||
+                isProtectedSettingsFolder(item));
+            const open = function () {
+                authorizedSettingsSession = true;
+                // Returning from the PIN keyboard reattaches Main. Preserve
+                // its Scroll/event handlers before native create empties body.
+                try { Lampa.Settings.main().render().detach(); } catch (e) {}
+                return original.apply(context, args);
+            };
+            if (protectedComponentPermit === String(component)) {
+                protectedComponentPermit = '';
+                return open();
+            }
+            // KinoPub configuration always requires its requested admin PIN;
+            // playback buttons and the provider's session are not intercepted.
+            if (admin) {
+                askSpecificPin(getPin(),
+                    kino ? 'PIN KinoPub' : 'RMEDIA ADMIN PIN', open, 'admin');
+                return;
+            }
+            if (!unlocked && !rmIsBasic() && !(safeSyncOpening && String(component) === 'account') &&
+                !(rmPlayerOpening && String(component) === 'player') &&
+                !(rmServerOpening && String(component) === 'server') &&
+                !authorizedSettingsSession) {
+                askMenuPin(open);
+                return;
+            }
+            return original.apply(context, args);
+        };
+        guarded.__rmedia_settings_create_guard = true;
+        return guarded;
+    }
+
+    function installSettingsGuards() {
+        if (!window.Lampa || !Lampa.Controller || !Lampa.Settings) return;
+        if (!Lampa.Controller.toggle.__rmedia_settings_guard) {
+            const original = Lampa.Controller.toggle;
+            const guarded = function (name) {
+                if (name === 'settings') {
+                    const permit = settingsOpenPermit;
+                    settingsOpenPermit = false;
+                    if (!permit && !settingsSessionAllowed()) {
+                        authorizedSettingsSession = false;
+                        askMenuPin(openAuthorizedSettings);
+                        return;
+                    }
+                }
+                let result;
+                try {
+                    result = original.apply(this, arguments);
+                } catch (err) {
+                    console.warn('[RMEDIA Lock] toggle failed, recovering', name, err);
+                    if (!/^(content|head)$/.test(String(name)) || !safeHome()) {
+                        if (String(name) !== 'content') safeHome();
+                    }
+                    return;
+                }
+                if (/^(content|head|menu)$/.test(String(name)) &&
+                    !$('body').hasClass('settings--open') && !pinDialogOpen) {
+                    authorizedSettingsSession = false;
+                }
+                return result;
+            };
+            guarded.__rmedia_settings_guard = true;
+            Lampa.Controller.toggle = guarded;
+        }
+        if (typeof Lampa.Settings.create === 'function') {
+            Lampa.Settings.create = guardedSettingsCreate(Lampa.Settings.create);
+        }
+        try {
+            // Main stores its own reference to create() before plugins load.
+            // Wrapping only Settings.create would miss native TV folder Enter.
+            const main = Lampa.Settings.main();
+            if (main && typeof main.onCreate === 'function') {
+                main.onCreate = guardedSettingsCreate(main.onCreate);
+            }
+        } catch (e) {}
+        if (Lampa.Extensions && typeof Lampa.Extensions.show === 'function' &&
+            !Lampa.Extensions.show.__rmedia_extensions_guard) {
+            const original = Lampa.Extensions.show;
+            const guarded = function () {
+                const context = this, args = arguments;
+                if (protectedComponentPermit === 'plugins' || rmIsBasic()) {
+                    protectedComponentPermit = '';
+                    return original.apply(context, args);
+                }
+                askPin(function () { original.apply(context, args); });
+            };
+            guarded.__rmedia_extensions_guard = true;
+            Lampa.Extensions.show = guarded;
+        }
+    }
+
+    function bindSafePlayerButton() {
+        if (settingsCaptureBound) return;
+        settingsCaptureBound = true;
+        const gate = function (event) {
+            const target = $(event.target);
+            const folder = target.closest('.settings-folder');
+            const component = folder.attr('data-component');
+            if (folder.length && component && (rmIsBasic() ? component === 'rmedia_lock' :
+                (isProtectedSettingsFolder(folder) || component === 'plugins'))) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                const kino = isKinoPubSettings(component, folder);
+                askSpecificPin(getPin(),
+                    kino ? 'PIN KinoPub' : 'RMEDIA ADMIN PIN', function () {
+                        protectedComponentPermit = String(component);
+                        try {
+                            if (component === 'plugins' && Lampa.Extensions && Lampa.Extensions.show) {
+                                Lampa.Extensions.show();
+                            } else {
+                                Lampa.Settings.main().render().detach();
+                                Lampa.Settings.create(component);
+                            }
+                        } finally { protectedComponentPermit = ''; }
+                    }, 'admin');
+                return;
+            }
+            if (!target.closest('.open--settings').length || settingsSessionAllowed()) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            askMenuPin(openAuthorizedSettings);
+        };
+        // Utils.trigger uses initEvent(name, false, true): TV events do not
+        // bubble to a jQuery handler on document. Native capture runs first.
+        document.addEventListener('hover:enter', gate, true);
+        document.addEventListener('click', gate, true);
+    }
+
+    function hideKinoPubMenu() {
+        $('.menu .menu__item').filter(function () {
+            const item = $(this);
+            const title = String(item.find('.menu__text').text() || '').replace(/\s+/g, ' ').trim();
+            return /rmedia\s*hub.*kino\s*pub/i.test(title) ||
+                String(item.attr('data-action') || '') === 'rmediahub_kinopub';
+        }).remove();
+    }
+
+    function collectPluginSettings() {
+        const found = [];
+        const blockedComponents = /^(player|account|interface|channels|parser|server|tmdb|plugins|parent_control|parental|cache|cache_data|remote|remote_config|remote_configuration|other|online_mod|iptv|settings)$/i;
+        const blockedTitles = /^(аккаунт|account|интерфейс|interface|каналы|channels|парсер|parser|torrserver|tmdb|расширения|extensions|родительский контроль|parental control|кеш и данные|кэш и данные|cache and data|удал[её]нная конфигурация|remote configuration|остальное|other|онлайн мод|online mod|iptv|плеер|player)$/i;
+        try {
+            if (!Lampa.Settings || !Lampa.Settings.main) return found;
+            const root = Lampa.Settings.main().render();
+            root.find('.settings-folder[data-component]').each(function () {
+                const item = $(this);
+                const component = String(item.attr('data-component') || '').trim();
+                const title = String(item.find('.settings-folder__name').text() || item.text() || '').trim();
+                if (!component || !title || isProtectedSettingsFolder(item)) return;
+                if (blockedComponents.test(component) || blockedTitles.test(title.toLowerCase())) return;
+                if (component.indexOf('rmedia_') === 0) return;
+                found.push({component: component, title: title});
+            });
+        } catch (e) {}
+        const seen = {};
+        return found.filter(function (plugin) {
+            if (seen[plugin.component]) return false;
+            seen[plugin.component] = true;
+            return true;
+        });
+    }
+
+    function openClientComponent(component) {
+        try {
+            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                Lampa.Controller.toggle('settings');
+            }
+            setTimeout(function () {
+                try {
+                    Lampa.Settings.create(component, {onBack: closeSettingsToContent});
+                } catch (e) {
+                    closeSettingsToContent();
+                    try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Не удалось открыть раздел: ' + component); } catch (err) {}
+                }
+            }, 80);
+        } catch (e) {
+            closeSettingsToContent();
+        }
+    }
+
+    function leaveClientSettings(action) {
+        closeSettingsToContent();
+        setTimeout(function () {
+            try { action(); } catch (e) {
+                try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Не удалось открыть пункт меню'); } catch (err) {}
+            }
+        }, 80);
+    }
+
+    function addClientMenuSettings() {
+        // The client menu has been retired: the gear now opens Lampa's native
+        // Settings list after PIN authorization. Keep this function as a no-op
+        // because init() still calls it in older plugin layouts.
+        clientMenuRegistered = true;
+    }
+
+    function runServerSpeedTest() {
+        let complete = false;
+        const attempt = function () {
+            if (complete) return false;
+            const candidates = $('.settings__body').find('.selector, .settings-param, .settings-param__item').filter(function () {
+                const label = String($(this).text() || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                return label === 'тестировать скорость' || label.indexOf('тестировать скорость') === 0 || label.indexOf('test speed') === 0;
+            });
+            if (!candidates.length) return false;
+            complete = true;
+            $('.settings__body').find('.settings-param, .settings-param__item').hide();
+            candidates.first().show();
+            candidates.first().trigger('hover:enter');
+            return true;
+        };
+        const fail = function () {
+            if (complete) return;
+            complete = true;
+            closeSettingsToContent();
+            try { Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Не удалось найти тест скорости в этой версии TorrServer'); } catch (e) {}
+        };
+        try {
+            if (Lampa.Settings.listener && Lampa.Settings.listener.follow) {
+                const onOpen = function (e) {
+                    if (!e || e.name !== 'server') return;
+                    Lampa.Settings.listener.remove && Lampa.Settings.listener.remove('open', onOpen);
+                    let tries = 0;
+                    const timer = setInterval(function () {
+                        if (attempt() || ++tries >= 20) {
+                            clearInterval(timer);
+                            if (!complete) fail();
+                        }
+                    }, 150);
+                };
+                Lampa.Settings.listener.follow('open', onOpen);
+            }
+            Lampa.Settings.create('server', {onBack: closeSettingsToContent});
+            let tries = 0;
+            const timer = setInterval(function () {
+                if (attempt() || ++tries > 20) {
+                    clearInterval(timer);
+                    if (!complete) fail();
+                }
+            }, 150);
+            setTimeout(fail, 3500);
+        } catch (e) { fail(); }
+    }
+
+    function protectAdminClicks() {
+        $(document).on(
+            'click.rmedia-lock hover:enter.rmedia-lock',
+            '.open--profile, .open--console, .open--terminal, .head__action[data-action="console"], .head__action[data-action="terminal"], .menu__item[data-action="settings"], .menu__item[data-action="about"], .menu__item[data-action="console"], .menu__item[data-action="edit"], .navigation-bar__item[data-action="settings"]',
+            function (e) {
+                if (!isEnabled() || unlocked) return;
+
+                e.preventDefault();
+                e.stopImmediatePropagation();
+
+                askPin(function () {
+                    unlockNow();
+
+                    try {
+                        if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                            Lampa.Controller.toggle('settings');
+                        }
+                    } catch (err) {}
+                });
+
+                return false;
+            }
+        );
+    }
+
+    function isProtectedSettingsFolder(item) {
+        if (!item || !item.length) return false;
+
+        const component = String(item.attr('data-component') || '').toLowerCase();
+        const title = String(item.find('.settings-folder__name').text() || item.text() || '').trim().toLowerCase();
+
+        if (isKinoPubSettings(component, item)) return true;
+        if (component === 'rmedia_lock') return true;
+        if (title.indexOf('rmedia lock') >= 0) return true;
+
+        // Filmix component name can differ between plugin versions,
+        // so protect both by component id fingerprint and visible title.
+        if (component.indexOf('filmix') >= 0) return true;
+        if (title === 'filmix' || title.indexOf('filmix') >= 0) return true;
+
+        // Protect the third-party extensions catalog shown as
+        // «Пиратские плагины». Different builds may use different
+        // component ids, so check both component and visible title.
+        if (component.indexOf('pirat') >= 0 || component.indexOf('pirate') >= 0) return true;
+        if (title.indexOf('пиратские плагины') >= 0) return true;
+
+        return false;
+    }
+
+    function openProtectedComponent(component) {
+        if (!component || !window.Lampa || !Lampa.Settings) return;
+
+        try {
+            // Native Settings Main does this before Settings.create().
+            // Without detach Android can leave two settings controllers/layers
+            // alive and the screen looks frozen.
+            if (Lampa.Settings.main && Lampa.Settings.main().render) {
+                Lampa.Settings.main().render().detach();
+            }
+        } catch (e) {}
+
+        setTimeout(function () {
+            try {
+                if (typeof Lampa.Settings.create === 'function') {
+                    Lampa.Settings.create(component);
+                }
+            } catch (e) {
+                try {
+                    if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                        Lampa.Controller.toggle('settings');
+                    }
+                } catch (err) {}
+            }
+        }, 30);
+    }
+
+    function bindProtectedComponentsGate() {
+        installSettingsGuards();
+        try {
+            const root = Lampa.Settings.main().render();
+            root.find('.settings-folder').each(function () {
+                const item = $(this);
+                if (isProtectedSettingsFolder(item)) item.attr('data-rmedia-protected', '1');
+            });
+        } catch (e) {}
+        protectedComponentsBound = true;
+    }
+
+    function closeSettingsToContent() {
+        safeSyncOpening = false;
+        rmPlayerOpening = false;
+        rmServerOpening = false;
+        safeSyncAccountReached = false;
+        const settingsWasOpen = authorizedSettingsSession;
+        authorizedSettingsSession = false;
+
+        if (isEnabled() && !unlocked) hideRestrictedUI();
+
+        // Android TV/phone navigation can retain the old Head button list
+        // after Settings is detached. Rebuilding it lets the gear respond
+        // again when the user opens the client menu a second time.
+        try {
+            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                Lampa.Controller.toggle('content');
+            }
+        } catch (e) {}
+
+        setTimeout(function () {
+            try {
+                $('body').removeClass('settings--open');
+                if (Lampa.Settings && Lampa.Settings.render) {
+                    Lampa.Settings.render().removeClass('animate animate-down');
+                }
+                hideRestrictedUI();
+                hideClientHeadExtras();
+
+                if (settingsWasOpen && Lampa.Controller && Lampa.Controller.enabled &&
+                    typeof Lampa.Controller.toggle === 'function') {
+                    const enabled = Lampa.Controller.enabled();
+                    if (enabled && enabled.name === 'head') {
+                        Lampa.Controller.toggle('head');
+                    }
+                }
+            } catch (e) {}
+        }, 0);
+    }
+
+    function bindMobileSettingsBackFix() {
+        if (mobileBackBound) return;
+        mobileBackBound = true;
+
+        $(document).on(
+            'click.rmedia-mobileback hover:enter.rmedia-mobileback',
+            '.navigation-bar__item[data-action="back"]',
+            function (e) {
+                if (!$('body').hasClass('settings--open')) return;
+
+                if (e) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                }
+
+                closeSettingsToContent();
+                return false;
+            }
+        );
+    }
+
+    function bindExtensionsGate() {
+        // Native Main.update rebinds row events on every opening. Guard the
+        // Extensions.show function instead of repeatedly replacing that row.
+        installSettingsGuards();
+        extensionGateBound = true;
+    }
+
+    function pruneAccountPanel(body) {
+        if (!safeSyncOpening || unlocked || !body || !body.length) return;
+
+        body.find('.settings--account-user-info').hide();
+        body.find('.settings--account-user-profile').hide();
+        body.find('.settings--account-user-out').hide();
+
+        body.find('.settings--account-user-sync').show();
+        body.find('.settings--account-user-backup').show();
+
+        body.find('.ad-server').hide();
+        body.find('[data-name="account_use"]').hide();
+        body.find('.settings-param__label').hide();
+
+        body.find('.settings--account-signin').not('.hide').show();
+    }
+
+    function focusSafeSync(body) {
+        if (!safeSyncOpening || unlocked || !body || !body.length) return;
+
+        try {
+            const sync = body.find('.settings--account-user-sync:visible').first();
+            const backup = body.find('.settings--account-user-backup:visible').first();
+
+            // На ТВ после скрытия лишних пунктов старая коллекция Navigator
+            // всё ещё может содержать скрытые элементы. Пересобираем её только
+            // из реально видимых selector'ов и сразу ставим фокус на Sync.
+            if (Lampa.Controller && typeof Lampa.Controller.collectionSet === 'function') {
+                Lampa.Controller.collectionSet(body, false, true);
+            }
+
+            let target = sync.length ? sync : backup;
+
+            if (target && target.length &&
+                Lampa.Controller && typeof Lampa.Controller.collectionFocus === 'function') {
+                Lampa.Controller.collectionFocus(target, body, true);
+            }
+        } catch (err) {
+            console.warn('[RMEDIA Lock] TV safe sync focus failed', err);
+        }
+    }
+
+    function exitSafeSync() {
+        safeSyncOpening = false;
+        safeSyncAccountReached = false;
+
+        try {
+            $('body').removeClass('settings--open');
+
+            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                Lampa.Controller.toggle('content');
+            }
+        } catch (e) {}
+
+        hideRestrictedUI();
+    }
+
+    function openSafeSync() {
+        safeSyncOpening = true;
+        safeSyncAccountReached = false;
+
+        try {
+            if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                Lampa.Controller.toggle('settings');
+            }
+
+            setTimeout(function () {
+                try {
+                    if (Lampa.Settings && typeof Lampa.Settings.create === 'function') {
+                        Lampa.Settings.create('account');
+                    }
+                } catch (err) {}
+            }, 80);
+        } catch (e) {}
+    }
+
+    function addClientSyncMenu() {
+        // В v11.7 боковую кнопку синхронизации убираем.
+        // Оставляем только верхнюю кнопку, которая лучше работает с ТВ-пультом.
+        $('.menu__item[data-action="rmedia_sync"], .rmedia-sync-menu').remove();
+        syncButtonAdded = false;
+    }
+
+    function addClientSyncHead() {
+        if (syncHeadAdded || !window.Lampa || !Lampa.Head || typeof Lampa.Head.addIcon !== 'function') return;
+
+        // Синхронизация нужна только тем, кто вошёл в аккаунт CUB (старые клиенты на lampa.mx).
+        // Остальным вместо неё — кнопка TorrServer: проверить скорость своего сервера.
+        let hasCub = false;
+        try { const acc = Lampa.Storage.get('account', '{}'); hasCub = !!(acc && acc.token); } catch (e) {}
+        const torr = !hasCub;
+
+        const icon = torr ?
+            '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 3h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm0 2v4h16V5H4Zm0 8h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2Zm0 2v4h16v-4H4Zm2-9h2v2H6V6Zm0 10h2v2H6v-2Zm5-10h7v2h-7V6Zm0 10h7v2h-7v-2Z"/></svg>' :
+            '<svg viewBox="0 0 24 24">' +
+            '<path fill="currentColor" d="M12 4a8 8 0 0 1 7.45 5.1l1.85-.62-2.58 4.3-4.32-2.55 1.95-.65A4.8 4.8 0 0 0 12 7.2a4.79 4.79 0 0 0-4.15 2.4L5.08 8A8 8 0 0 1 12 4Zm-7.45 10.9-1.85.62 2.58-4.3 4.32 2.55-1.95.65A4.8 4.8 0 0 0 12 16.8a4.79 4.79 0 0 0 4.15-2.4L18.92 16A8 8 0 0 1 12 20a8 8 0 0 1-7.45-5.1Z"/>' +
+            '</svg>';
+
+        const item = Lampa.Head.addIcon(icon, function () {
+            // После hover:long телевизор часто ещё присылает обычный Enter
+            // при отпускании OK. Его один раз поглощаем.
+            if (suppressNextSyncEnter) {
+                suppressNextSyncEnter = false;
+                return;
+            }
+
+            if (torr) rmOpenServerSettings();
+            else openSafeSync();
+        });
+
+        if (item && item.attr) {
+            item.attr('data-rmedia-sync-head', '1');
+            item.attr('title', torr ? 'TorrServer' : 'Синхронизация');
+
+            item.off('hover:long.rmedia-admin').on('hover:long.rmedia-admin', function (e) {
+                if (e) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                }
+
+                // Не даём отпусканию долгого OK открыть Safe Sync/Settings.
+                suppressNextSyncEnter = true;
+
+                // Страховка: через 2 сек флаг снимается, даже если TV не пришлёт Enter.
+                setTimeout(function () {
+                    suppressNextSyncEnter = false;
+                }, 2000);
+
+                if (unlocked) {
+                    lockNow();
+                    try {
+                        if (Lampa.Controller && typeof Lampa.Controller.toggle === 'function') {
+                            Lampa.Controller.toggle('content');
+                        }
+                    } catch (err) {}
+                } else {
+                    askPin(unlockNow);
+                }
+
+                return false;
+            });
+        }
+
+        syncHeadAdded = true;
+    }
+
+    // ===== Кнопка «Плеер»: клиент без PIN открывает ТОЛЬКО настройки плеера =====
+    // (выбрать/сбросить плеер на Android и Apple TV). Остальные настройки закрыты.
+    let rmPlayerOpening = false;
+    let rmPlayerHeadAdded = false;
+
+    function rmOpenPlayerSettings() {
+        rmPlayerOpening = true;
+        try {
+            Lampa.Controller.toggle('settings');
+            setTimeout(function () {
+                try { Lampa.Settings.create('player', { onBack: rmClosePlayerSettings }); }
+                catch (e) { rmClosePlayerSettings(); }
+            }, 80);
+        } catch (e) { rmClosePlayerSettings(); }
+    }
+
+    function rmClosePlayerSettings() {
+        rmPlayerOpening = false;
+        closeSettingsToContent();
+    }
+
+    let rmServerOpening = false;
+    function rmOpenServerSettings() {
+        rmServerOpening = true;
+        try {
+            Lampa.Controller.toggle('settings');
+            setTimeout(function () {
+                try {
+                    Lampa.Settings.create('server', { onBack: function () { rmServerOpening = false; closeSettingsToContent(); } });
+                    // Ссылку на сервер клиенту не показываем — только статус и тест скорости.
+                    [0, 150, 500, 1200].forEach(function (t) {
+                        setTimeout(function () { try { hideTorrPromo($('.settings__body')); } catch (e) {} }, t);
+                    });
+                } catch (e) { rmServerOpening = false; closeSettingsToContent(); }
+            }, 80);
+        } catch (e) { rmServerOpening = false; closeSettingsToContent(); }
+    }
+
+    function addClientPlayerHead() {
+        if (rmPlayerHeadAdded || !window.Lampa || !Lampa.Head || typeof Lampa.Head.addIcon !== 'function') return;
+        const icon =
+            '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm0 2v10h16V7H4Zm6 2.5 5 2.5-5 2.5v-5Z"/></svg>';
+        const item = Lampa.Head.addIcon(icon, rmOpenPlayerSettings);
+        if (item && item.attr) {
+            item.attr('data-rmedia-sync-head', '1'); // не прятать вместе с консолью
+            item.attr('data-rmedia-player-head', '1');
+            item.attr('title', 'Плеер');
+        }
+        rmPlayerHeadAdded = true;
+    }
+    // ===== /Плеер =====
+
+    function bindTvAdminShortcut() {
+        // v11.9: глобальный секрет по стрелкам отключён.
+        // На ТВ админ-вход теперь через ДОЛГОЕ нажатие OK
+        // на верхней кнопке «Синхронизация».
+    }
+
+    function watchSettings() {
+        try {
+            if (Lampa.Settings && Lampa.Settings.listener && Lampa.Settings.listener.follow) {
+                Lampa.Settings.listener.follow('open', function (e) {
+                    if (e && e.name === 'main') {
+                        setTimeout(bindExtensionsGate, 0);
+                        setTimeout(bindExtensionsGate, 120);
+
+                        setTimeout(bindProtectedComponentsGate, 0);
+                        setTimeout(bindProtectedComponentsGate, 120);
+                        setTimeout(bindProtectedComponentsGate, 350);
+                        setTimeout(bindProtectedComponentsGate, 700);
+                    }
+
+                    if (e && e.name === 'server') {
+                        setTimeout(function () { hideTorrPromo(e.body); }, 0);
+                        setTimeout(function () { hideTorrPromo(e.body); }, 150);
+                        setTimeout(function () { hideTorrPromo(e.body); }, 500);
+                    }
+
+                    if (!safeSyncOpening || unlocked) return;
+
+                    if (e.name === 'account') {
+                        safeSyncAccountReached = true;
+
+                        setTimeout(function () {
+                            pruneAccountPanel(e.body);
+                            focusSafeSync(e.body);
+                        }, 0);
+
+                        setTimeout(function () {
+                            pruneAccountPanel(e.body);
+                            focusSafeSync(e.body);
+                        }, 120);
+
+                        setTimeout(function () {
+                            focusSafeSync(e.body);
+                        }, 350);
+
+                        return;
+                    }
+
+                    if (e.name === 'main' && safeSyncAccountReached) {
+                        setTimeout(exitSafeSync, 0);
+                        return;
+                    }
+
+                    if (e.name !== 'main') {
+                        setTimeout(exitSafeSync, 0);
+                    }
+                });
+
+                Lampa.Settings.listener.follow('close', function () {
+                    authorizedSettingsSession = false;
+                    settingsOpenPermit = false;
+                    safeSyncOpening = false;
+                    safeSyncAccountReached = false;
+                });
+            }
+        } catch (e) {}
+    }
+
+    function addAdminSettings() {
+        if (!window.Lampa || !Lampa.SettingsApi) return;
+
+        Lampa.SettingsApi.addComponent({
+            component: 'rmedia_lock',
+            name: 'RMEDIA Lock',
+            icon:
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+                '<path fill="currentColor" d="M17 8h-1V6a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 1 1 4 0v2h-4V6Zm2 9a2 2 0 1 1 0-4 2 2 0 0 1 0 4Z"/>' +
+                '</svg>'
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
+            param: {
+                name: ENABLED_KEY,
+                type: 'trigger',
+                default: true
+            },
+            field: {
+                name: 'Клиентский режим',
+                description: 'Скрывает административные пункты и оставляет безопасную синхронизацию'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
+            param: {
+                name: MENU_PIN_KEY,
+                type: 'input',
+                values: '',
+                default: '1111'
+            },
+            field: {
+                name: 'PIN меню',
+                description: 'Для входа в RMEDIA Lock и Filmix'
+            }
+        });
+
+    }
+
+
+    // ===== RMEDIA REMOTE CONTROL v11 =====
+    // HTTPS endpoint verified with live Lampa heartbeat/CORS on 2026-10-12.
+    const REMOTE_API = 'https://admin.rmediahub.app';
+    const REMOTE_API_LEGACY = 'http://178.105.179.72:8787';
+    const REMOTE_API_VERIFIED = '';
+    const REMOTE_API_KEY = 'rmedia_remote_api_url';
+    const REMOTE_ID_KEY = 'rmedia_remote_client_id';
+    const REMOTE_KEY_KEY = 'rmedia_remote_client_key';
+    const REMOTE_CACHE_KEY = 'rmedia_remote_last_status';
+    const REMOTE_CACHE_TIME_KEY = 'rmedia_remote_last_ok_at';
+    const REMOTE_INSTALL_ID_KEY = 'rmedia_install_id';
+    const REMOTE_GRACE_MS = 24 * 60 * 60 * 1000;
+
+    let remoteOverlay = null;
+    let remoteTimer = null;
+    let remoteClockTimer = null;
+    let remoteData = null;
+    let remoteOverlaySignature = '';
+    let remoteOriginController = 'content';
+    let remoteChecking = false;
+    const CONTACT_FALLBACK = 'https://t.me/rznvroman';
+
+    function remoteApi() {
+        const candidate = remoteClean(remoteGet(REMOTE_API_KEY, '')) || REMOTE_API_VERIFIED || REMOTE_API;
+        const parsed = new URL(candidate);
+        if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+            throw new Error('Invalid RMEDIA API URL');
+        }
+        const normalized = candidate.replace(/\/+$/, '');
+        // CUB imports may retain an explicit legacy endpoint. Migrate only that
+        // exact address; leave customer IDs, keys and device bindings unchanged.
+        if (normalized === REMOTE_API_LEGACY) {
+            remoteSet(REMOTE_API_KEY, REMOTE_API);
+            return REMOTE_API;
+        }
+        return normalized;
+    }
+
+    function remoteScope() {
+        return remoteClientId() + ':' + remoteClientKey() + ':' + makeInstallId() + ':' + remoteApi();
+    }
+
+    function remoteScopeMatches(scope) {
+        const current = remoteScope();
+        if (scope === current) return true;
+        // Preserve the same installation's cached status during this endpoint
+        // migration, including blocked/device-denied states and original times.
+        // A different ID, key, installation or custom API must never match.
+        if (remoteApi() !== REMOTE_API) return false;
+        const prefix = remoteClientId() + ':' + remoteClientKey() + ':' + makeInstallId() + ':';
+        return scope === prefix + REMOTE_API_LEGACY;
+    }
+
+    function remoteNow(data) {
+        const server = Date.parse(data && data.server_time);
+        const received = Number(data && data._received_at);
+        return Number.isFinite(server) && received ? server + (Date.now() - received) : Date.now();
+    }
+
+    function remoteEscape(value) {
+        return String(value || '').replace(/[&<>"']/g, function (c) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c];
+        });
+    }
+
+    function remoteContact(data) {
+        const value = String(data && data.admin_contact_url || CONTACT_FALLBACK);
+        try {
+            const parsed = new URL(value);
+            if (/^https?:$/.test(parsed.protocol) && !parsed.username && !parsed.password) return value;
+        } catch(e) {}
+        return CONTACT_FALLBACK;
+    }
+
+    // Подсветка выбранной кнопки на наших экранах (пульт ТВ, мышь, клавиатура).
+    (function rmFocusStyle() {
+        try {
+            if (document.getElementById('rmedia-focus-style')) return;
+            const st = document.createElement('style');
+            st.id = 'rmedia-focus-style';
+            st.textContent =
+                '.rmedia-remote-lock .selector{transition:transform .12s,background .12s,color .12s;outline:none}' +
+                '.rmedia-remote-lock .selector.focus{' +
+                'background:#fff!important;color:#05080f!important;border-color:#fff!important;' +
+                'transform:scale(1.08);box-shadow:0 0 0 4px rgba(138,180,255,.55)}';
+            (document.head || document.documentElement).appendChild(st);
+        } catch (e) {}
+    })();
+
+    function focusRemoteOverlay() {
+        if (!remoteOverlay) return;
+        try { Lampa.Controller.toggle('rmedia_remote_lock'); } catch(e) {}
+        let button = remoteOverlay.find('.rmedia-activate');
+        if (!button.length) button = remoteOverlay.find('.rmedia-unbind');
+        if (!button.length) button = remoteOverlay.find('.rmedia-contact');
+        if (!button.length) button = remoteOverlay.find('.rmedia-release');
+        if (button.length && button[0].focus) button[0].focus();
+    }
+
+    // Браузерный фокус держим на той же кнопке, что подсвечена пультом,
+    // иначе ОК «нажимает» ещё и первую кнопку (открывался Телеграм).
+    function syncRemoteDomFocus() {
+        try {
+            const el = remoteOverlay && remoteOverlay.find('.selector.focus')[0];
+            if (el && el.focus && document.activeElement !== el) el.focus();
+        } catch (e) {}
+    }
+
+    function moveRemoteFocus(direction) {
+        if (!remoteOverlay) return;
+        try {
+            if (window.Navigator && typeof Navigator.move === 'function' && Navigator.canmove && Navigator.canmove(direction)) {
+                Navigator.move(direction);
+                syncRemoteDomFocus();
+                return;
+            }
+        } catch (e) {}
+        const items = remoteOverlay.find('.selector');
+        if (items.length < 2) return focusRemoteOverlay();
+        const current = items.index(remoteOverlay.find('.selector.focus'));
+        const next = direction === 'left' || direction === 'up'
+            ? Math.max(0, current - 1) : Math.min(items.length - 1, current + 1);
+        try { Lampa.Controller.collectionFocus(items[next], remoteOverlay); } catch (e) { focusRemoteOverlay(); }
+        syncRemoteDomFocus();
+    }
+
+    function remoteGet(name, fallback) {
+        try {
+            const v = Lampa.Storage.get(name, fallback);
+            return v == null ? fallback : v;
+        } catch(e) {
+            try {
+                const v = localStorage.getItem(name);
+                return v == null ? fallback : v;
+            } catch(e2) { return fallback; }
+        }
+    }
+
+    function remoteSet(name, value) {
+        try { Lampa.Storage.set(name, value); return; } catch(e) {}
+        try { localStorage.setItem(name, value); } catch(e2) {}
+    }
+
+    function remoteClean(value) {
+        value = String(value == null ? '' : value).trim();
+        if (value === 'undefined' || value === 'null' || value === 'не задано') return '';
+        return value;
+    }
+
+    function remoteClientId(){ return remoteClean(remoteGet(REMOTE_ID_KEY,'не задано')); }
+    function remoteClientKey(){ return remoteClean(remoteGet(REMOTE_KEY_KEY,'не задано')); }
+
+    function makeInstallId() {
+        let id = remoteClean(remoteGet(REMOTE_INSTALL_ID_KEY, ''));
+        if (id) return id;
+
+        try {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                id = 'DEV-' + window.crypto.randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase();
+            }
+        } catch(e) {}
+
+        if (!id) {
+            const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            let s = '';
+            for (let i = 0; i < 12; i++) {
+                s += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+            }
+            id = 'DEV-' + s;
+        }
+
+        remoteSet(REMOTE_INSTALL_ID_KEY, id);
+        return id;
+    }
+
+    function detectDeviceInfo() {
+        const ua = String((navigator && navigator.userAgent) || '');
+        const platformRaw = String((navigator && navigator.platform) || '');
+        let platform = platformRaw || 'Web';
+        let name = '';
+
+        if (/Tizen/i.test(ua)) {
+            platform = 'Tizen';
+            name = 'Samsung TV';
+        } else if (/Web0S|webOS/i.test(ua)) {
+            platform = 'webOS';
+            name = 'LG TV';
+        } else if (/Android/i.test(ua) && /TV|BRAVIA|AFT|MiTV|SmartTV/i.test(ua)) {
+            platform = 'Android TV';
+            name = 'Android TV';
+        } else if (/Android/i.test(ua)) {
+            platform = 'Android';
+            name = 'Android';
+        } else if (/iPad; CPU iPhone OS/i.test(ua)) {
+            // Приложение Лампы для Apple TV (TestFlight) представляется так.
+            platform = 'tvOS';
+            name = 'Apple TV';
+        } else if (/iPad/i.test(ua) || (platformRaw === 'MacIntel' && navigator.maxTouchPoints > 1)) {
+            platform = 'iPadOS';
+            name = 'iPad';
+        } else if (/iPhone/i.test(ua)) {
+            platform = 'iOS';
+            name = 'iPhone';
+        } else if (/Windows/i.test(ua)) {
+            platform = 'Windows';
+            name = 'Windows PC';
+        } else if (/Macintosh|Mac OS X/i.test(ua)) {
+            platform = 'macOS';
+            name = 'Mac';
+        } else if (/Linux/i.test(ua)) {
+            platform = 'Linux';
+            name = 'Linux';
+        }
+
+        // Some TV user agents expose a model token.
+        const modelPatterns = [
+            /\b(SM-[A-Z0-9-]+)\b/i,
+            /\b(BRAVIA[\w-]*)\b/i,
+            /\b(TV-[A-Z0-9-]+)\b/i,
+            /\b(LM\d+[A-Z0-9-]*)\b/i,
+            /\b(OLED\d+[A-Z0-9-]*)\b/i
+        ];
+
+        for (let i = 0; i < modelPatterns.length; i++) {
+            const m = ua.match(modelPatterns[i]);
+            if (m && m[1]) {
+                name = name ? (name + ' · ' + m[1]) : m[1];
+                break;
+            }
+        }
+
+        return {
+            install_id: makeInstallId(),
+            device_name: name || platform || 'Lampa',
+            platform: platform || 'Web',
+            user_agent: ua.slice(0, 500)
+        };
+    }
+
+    function removeRemoteOverlay() {
+        if (remoteOverlay) {
+            remoteOverlay.remove();
+            remoteOverlay = null;
+            remoteOverlaySignature = '';
+            try { Lampa.Controller.toggle(remoteOriginController || 'content'); } catch(e) {}
+        }
+    }
+
+    function showRemoteOverlay(status, message, data) {
+        const isTestExpired = status === 'expired' && data && data.test &&
+            !data.test.converted_at && remoteNow(data) >= Date.parse(data.test.ends_at);
+        const creditUntil = Date.parse(data && data.credit_until);
+        const creditVisible = isTestExpired && data.credit_available !== false &&
+            Number.isFinite(creditUntil) && remoteNow(data) < creditUntil;
+        const contact = remoteContact(data);
+        // ТЕСТ ТВ: после окончания — QR на Telegram администратора и «Вернуть обычную Лампу».
+        // На узком экране (телефон) QR бесполезен: там вместо него кнопка «Связаться».
+        const isTvTest = !!(data && data.test && data.test.kind === 'tv');
+        const tvOffer = isTestExpired && isTvTest;
+        let offerWide = true;
+        try { offerWide = window.innerWidth >= 760; } catch (e) {}
+        const showRelease = isTestExpired || status === 'pending' || status === 'blocked' || status === 'expired';
+        const limitDevices = status === 'device_limit' && data && Array.isArray(data.devices) ? data.devices : [];
+        const signature = JSON.stringify([status, message, isTestExpired, creditVisible, contact, showRelease,
+            limitDevices.map(function (d) { return d.ref; }), data && data.can_unbind, data && data.next_unbind_at,
+            tvOffer, offerWide]);
+        if (!remoteOverlay) {
+            try {
+                const origin = Lampa.Controller.enabled();
+                remoteOriginController = origin && origin.name || 'content';
+            } catch(e) {}
+            remoteOverlay = $('<div class="rmedia-remote-lock"></div>');
+            remoteOverlay.css({
+                position: 'fixed',
+                top: '0', left: '0', right: '0', bottom: '0', width: '100%', height: '100%', boxSizing: 'border-box',
+                zIndex: '999999',
+                background: '#090909',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '28px',
+                textAlign: 'center'
+            });
+            remoteOverlay.attr('role', 'dialog').attr('aria-modal', 'true');
+            $('body').append(remoteOverlay);
+        }
+
+        const title =
+            isTestExpired ? (isTvTest ? 'ТЕСТ ТВ завершён' : 'ULTIMATE TEST завершён') : status === 'pending'
+                ? 'Ожидаем подтверждение оплаты'
+                : status === 'expired'
+                    ? 'Срок доступа закончился'
+                    : status === 'device_limit'
+                        ? 'Достигнут лимит устройств'
+                        : 'Доступ временно приостановлен';
+
+        function normalizeText(value) {
+            return String(value || '')
+                .trim()
+                .replace(/[.!\s]+$/g, '')
+                .toLowerCase();
+        }
+
+        const cleanMessage = String(message || '').trim();
+        const extraMessage =
+            cleanMessage && normalizeText(cleanMessage) !== normalizeText(title)
+                ? cleanMessage
+                : '';
+
+        if (signature !== remoteOverlaySignature) {
+          remoteOverlaySignature = signature;
+          remoteOverlay.html(
+            '<div style="max-width:720px">' +
+                '<div style="font-size:42px;font-weight:700;margin-bottom:18px">RMEDIAHUB</div>' +
+                '<div style="font-size:28px;margin-bottom:12px">' + title + '</div>' +
+                (extraMessage
+                    ? '<div style="font-size:20px;opacity:.75;margin-bottom:10px">' + remoteEscape(extraMessage) + '</div>'
+                    : '') +
+                (limitDevices.length ? rmDeviceListHtml(limitDevices, data) : '') +
+                (creditVisible ? '<div class="rmedia-credit" style="font-size:20px;margin-top:20px">' +
+                    '10€ теста можно зачесть в подписку.<br>Осталось: <span class="rmedia-credit-time"></span></div>' : '') +
+                (tvOffer && offerWide ? '<div class="rmedia-qr-wrap" style="margin-top:22px;text-align:center">' +
+                    '<div class="rmedia-qr" style="width:210px;height:210px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden"></div>' +
+                    '<div style="font-size:19px;opacity:.85;margin-top:12px">Наведите камеру телефона — откроется Telegram</div>' +
+                '</div>' : '') +
+                (tvOffer && offerWide ? '<div style="font-size:18px;opacity:.75;margin-top:8px;overflow-wrap:anywhere">' + remoteEscape(contact.replace(/^https?:\/\//, '')) + '</div>' : '') +
+                (tvOffer && offerWide ? '' : '<div style="font-size:18px;opacity:.9;margin-top:26px">' +
+                    '<a class="rmedia-contact selector" tabindex="0" href="' + remoteEscape(contact) + '" target="_blank" rel="noopener noreferrer" ' +
+                    'style="display:inline-block;padding:14px 20px;border:2px solid #8ab4ff;border-radius:12px;color:#8ab4ff;font-weight:600;">Связаться с администратором</a>' +
+                    '<div style="margin-top:12px;overflow-wrap:anywhere">' + remoteEscape(contact.replace(/^https?:\/\//, '')) + '</div>' +
+                '</div>') +
+                // Клиент может сам вернуться в обычную Лампу: после теста, при Pending,
+                // блокировке или окончании срока. Подтверждение — вторым нажатием.
+                (showRelease ? '<div style="font-size:16px;margin-top:' + (tvOffer && offerWide ? '24' : '34') + 'px">' +
+                    '<a class="rmedia-release selector" tabindex="0" role="button" ' +
+                    'style="display:inline-block;padding:12px 18px;border:2px solid rgba(255,255,255,.55);border-radius:12px;color:rgba(255,255,255,.8);font-weight:600;cursor:pointer">Вернуть обычную Лампу</a></div>' : '') +
+            '</div>'
+          );
+          // QR на Telegram администратора рисует сама Лампа. Её библиотека QR может загрузиться
+          // позже экрана блокировки, поэтому пробуем несколько раз; пока не нарисован — блок спрятан.
+          rmDrawOfferQr(contact);
+          [600, 2000, 5000, 12000].forEach(function (ms) { setTimeout(function () { rmDrawOfferQr(contact); }, ms); });
+          const button = remoteOverlay.find('.rmedia-contact');
+          button.on('hover:enter.rmedia-contact', function () {
+              if (this.click) this.click();
+          });
+          rmBindReleaseButton(remoteOverlay);
+          rmBindUnbindButtons(remoteOverlay);
+          focusRemoteOverlay();
+        }
+        if (creditVisible) {
+            const seconds = Math.max(0, Math.ceil((creditUntil - remoteNow(data)) / 1000));
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor(seconds % 3600 / 60);
+            const remainder = seconds % 60;
+            remoteOverlay.find('.rmedia-credit-time').text(hours + ' ч ' + minutes + ' мин ' + remainder + ' сек');
+        }
+    }
+
+    // ===== RMEDIAHUB CONFIG: TS / Filmix / KinoPub / переезд =====
+    // Админка присылает config только активному клиенту. Пустой config ничего
+    // не меняет — клиенты, настроенные через CUB, остаются как были.
+    const RM_TS_KEY = 'rmedia_ts_plugin';
+    const RM_SHARED_KEYS = { filmix: 'rmediahub.filmix.shared.v1', kinopub: 'rmediahub.kinopub.shared.v1' };
+    let rmTsLoaded = '';
+    let rmMoving = false;
+
+    function rmLampaPluginUrls() {
+        try {
+            return (Lampa.Storage.get('plugins', '[]') || []).map(function (p) { return String(p && p.url || ''); });
+        } catch (e) { return []; }
+    }
+
+    // TS из админки кладём в «Расширения» Лампы (как при ручной настройке),
+    // чтобы у клиента было меню TSArea (сервер, Flash). prevUrl — прошлый TS
+    // из админки: если сервер сменили, старый убираем. Чужие расширения не трогаем.
+    function rmEnsureTsExtension(url, prevUrl) {
+        const valid = /^http:\/\/[a-z0-9.-]+(:\d{1,5})?\/p$/;
+        if (url && !valid.test(url)) return;
+        try {
+            let have = false;
+            Lampa.Plugins.get().forEach(function (p) {
+                const u = String(p && p.url || '');
+                if (url && u === url) { have = true; return; }
+                if (prevUrl && u === prevUrl && valid.test(prevUrl)) Lampa.Plugins.remove(p);
+            });
+            if (url && !have) Lampa.Plugins.add({ url: url, status: 1, name: 'TSArea' });
+            if (url) rmTsLoaded = url;
+        } catch (e) {
+            // Нет API расширений (старая Лампа) — просто подгружаем скрипт.
+            if (!url || rmTsLoaded === url || rmLampaPluginUrls().indexOf(url) >= 0) return;
+            rmTsLoaded = url;
+            const s = document.createElement('script');
+            s.src = url;
+            document.head.appendChild(s);
+        }
+    }
+
+    function rmApplySharedKey(service, v) {
+        if (!v || !/^[a-f0-9]{64}$/.test(String(v.key || '')) || !/^https:\/\/[a-z0-9.-]+$/.test(String(v.origin || ''))) return;
+        const name = RM_SHARED_KEYS[service];
+        let cur = null;
+        try { cur = JSON.parse(localStorage.getItem(name) || 'null'); } catch (e) {}
+        if (cur && cur.version === 1 && cur.key === v.key && cur.origin === v.origin) return;
+        try { localStorage.setItem(name, JSON.stringify({ version: 1, origin: v.origin, key: v.key })); } catch (e) {}
+        console.log('[RMEDIA] ' + service + ' binding updated');
+    }
+
+    // Адрес TorrServer клиента = адрес TS-плагина без «http://» и «/p»
+    // (как при ручной настройке: v29poyj51.tsarea.tv:8880).
+    // Пишем в «Основную ссылку» Лампы, только если он ещё не такой.
+    function rmApplyTorrServer(tsPlugin) {
+        const m = /^http:\/\/([a-z0-9.-]+(:\d{1,5})?)\/p$/.exec(tsPlugin || '');
+        if (!m) return;
+        const url = m[1];
+        try {
+            if (String(Lampa.Storage.get('torrserver_url', '')) !== url) Lampa.Storage.set('torrserver_url', url);
+            if (String(Lampa.Storage.get('torrserver_use_link', 'one')) !== 'one') Lampa.Storage.set('torrserver_use_link', 'one');
+        } catch (e) {}
+    }
+
+    // IPTV-плейлист клиента из админки → свой плейлист IPTV-плагина
+    // («Добавить новый плейлист»), работает без CUB. Трогаем только свою запись.
+    function rmApplyIptv(url) {
+        const ID = 'rmediahub';
+        let list = [];
+        try { list = Lampa.Storage.get('iptv_playlist_custom', '[]') || []; } catch (e) {}
+        if (!Array.isArray(list)) list = [];
+        let idx = -1;
+        list.forEach(function (p, i) { if (p && p.id === ID) idx = i; });
+        if (!url) {
+            if (idx >= 0) { list.splice(idx, 1); Lampa.Storage.set('iptv_playlist_custom', list); }
+            return;
+        }
+        if (url.length > 1000 || !/^https?:\/\/[^\s"'<>]+$/i.test(url)) return;
+        if (idx >= 0 && list[idx].url === url) return;
+        const item = { id: ID, custom: true, url: url, name: 'RMediaHub TV' };
+        if (idx >= 0) list[idx] = item; else list.push(item);
+        Lampa.Storage.set('iptv_playlist_custom', list);
+    }
+
+    let rmBundleLoaded = false;
+    function rmLoadBundle(appUrl) {
+        if (rmBundleLoaded || window.rmedia_bundle_loaded) return;
+        rmBundleLoaded = true;
+        window.rmedia_bundle_loaded = true;
+        try {
+            const script = document.createElement('script');
+            // С GitHub по https: у части провайдеров http-адрес rmediahub.cc подменяется заглушкой.
+            script.src = 'https://rmediahub.github.io/plugin/app/plugins/modification.js?v=' + Math.floor(Date.now() / 9e5);
+            document.head.appendChild(script);
+        } catch (e) {}
+    }
+
+    function rmMoveTo(appUrl) {
+        if (rmMoving || !/^http:\/\/[a-z0-9.-]+(:\d{1,5})?\/$/.test(appUrl || '')) return;
+        if (location.protocol + '//' + location.host + '/' === appUrl) return; // уже там
+        if (rmReleaseRequested) return;
+        // Приложение Лампы для Apple TV (TestFlight): не переезжаем (после перезапуска
+        // оно зависает на чужом адресе), а подгружаем набор плагинов RMediaHub
+        // прямо в текущую Лампу — Filmix, KinoPub и остальное, как на rmediahub.cc.
+        if (/iPad; CPU iPhone OS/i.test(String(navigator.userAgent || ''))) { rmLoadBundle(appUrl); return; }
+        // Защита от «пинг-понга»: некоторые приложения Лампы (новый Android 1.13.x)
+        // после перехода сами возвращают на свой адрес. Если переезд уже был 2 раза
+        // за 10 минут и мы снова здесь — больше не переезжаем на этом устройстве,
+        // а грузим набор RMediaHub прямо в текущую Лампу.
+        try {
+            if (localStorage.getItem('rmedia_move_disabled') === '1') { rmLoadBundle(appUrl); return; }
+            const now = Date.now();
+            let tries = [];
+            try { tries = JSON.parse(localStorage.getItem('rmedia_move_tries') || '[]') || []; } catch (e) { tries = []; }
+            tries = tries.filter(function (t) { return now - t < 10 * 60000; });
+            if (tries.length >= 2) {
+                localStorage.setItem('rmedia_move_disabled', '1');
+                localStorage.removeItem('rmedia_move_tries');
+                rmLoadBundle(appUrl);
+                return;
+            }
+            tries.push(now);
+            localStorage.setItem('rmedia_move_tries', JSON.stringify(tries));
+        } catch (e) {}
+        const id = remoteClientId(), key = remoteClientKey();
+        if (!id || !key) return;
+        rmMoving = true;
+        try { Lampa.Noty.show('Переходим в RMediaHub…'); } catch (e) {}
+        // Ключ клиента — во фрагменте (#), он не уходит на сервер и в логи.
+        setTimeout(function () {
+            window.location.href = appUrl + '#rmid=' + encodeURIComponent(id) + '&rmkey=' + encodeURIComponent(key);
+        }, 1500);
+    }
+
+    // ===== Вернуть обычную Лампу =====
+    // Убирает всё наше: Лок и наши расширения, ключи, плейлист, переезд.
+    // В обычной Лампе — перезапуск без Лока. В Лампе RMediaHub (rmediahub.cc)
+    // — пометка «отвязан» и переход на обычную lampa.mx (index.html потом
+    // при каждом запуске сразу отправляет туда же).
+    let rmReleasing = false;
+    // «Вернуть обычную Лампу» — подтверждение вторым нажатием (чтобы не нажали случайно).
+    // ===== Лимит устройств: клиент сам отвязывает одно устройство =====
+    function rmAgo(iso) {
+        const t = Date.parse(iso || '');
+        if (!Number.isFinite(t)) return '';
+        const min = Math.max(0, Math.round((Date.now() - t) / 60000));
+        if (min < 5) return 'сейчас в сети';
+        if (min < 60) return 'был ' + min + ' мин назад';
+        const h = Math.round(min / 60);
+        if (h < 24) return 'был ' + h + ' ч назад';
+        const d = Math.round(h / 24);
+        return 'был ' + d + ' дн назад';
+    }
+    function rmDeviceListHtml(list, data) {
+        const can = data && data.can_unbind !== false;
+        let next = '';
+        if (!can && data.next_unbind_at) {
+            try {
+                const dt = new Date(data.next_unbind_at);
+                next = ('0' + dt.getDate()).slice(-2) + '.' + ('0' + (dt.getMonth() + 1)).slice(-2) + ' в ' +
+                    ('0' + dt.getHours()).slice(-2) + ':' + ('0' + dt.getMinutes()).slice(-2);
+            } catch (e) {}
+        }
+        let html = '<div style="font-size:19px;margin:18px 0 10px">' +
+            (can ? 'Выберите устройство, которое больше не используете:' :
+                'Сегодня одно устройство уже отвязали. Следующее можно отвязать ' + (next ? remoteEscape(next) : 'через сутки') + ' или через администратора.') +
+            '</div><div style="display:flex;flex-direction:column;gap:10px;align-items:stretch;max-width:560px;margin:0 auto">';
+        list.forEach(function (d, i) {
+            const name = String(d.name || d.platform || ('Устройство ' + (i + 1)));
+            const plat = d.platform && d.platform !== d.name ? ' · ' + d.platform : '';
+            html += '<div class="' + (can ? 'rmedia-unbind selector' : '') + '" tabindex="0" role="button" data-ref="' + remoteEscape(d.ref) + '" ' +
+                'style="padding:12px 16px;border:2px solid rgba(255,255,255,.35);border-radius:12px;text-align:left;cursor:pointer">' +
+                '<div style="font-size:19px;font-weight:600">📺 ' + remoteEscape(name + plat) + '</div>' +
+                '<div class="rmedia-unbind-sub" style="font-size:15px;opacity:.7">' + remoteEscape(rmAgo(d.last_seen)) + (can ? ' · нажмите, чтобы отвязать' : '') + '</div>' +
+            '</div>';
+        });
+        return html + '</div>';
+    }
+    let rmUnbinding = false;
+    function rmBindUnbindButtons(root) {
+        let armedRef = '', armedAt = 0;
+        root.find('.rmedia-unbind').on('hover:enter.rmedia click.rmedia', function (e) {
+            if (e && e.preventDefault) e.preventDefault();
+            if (e && e.stopPropagation) e.stopPropagation();
+            if (rmUnbinding) return;
+            const el = $(this), ref = String(el.attr('data-ref') || '');
+            if (!ref) return;
+            if (armedRef !== ref || Date.now() - armedAt > 8000) {
+                armedRef = ref; armedAt = Date.now();
+                root.find('.rmedia-unbind').css('border-color', 'rgba(255,255,255,.35)');
+                el.css('border-color', '#ff8a8a');
+                el.find('.rmedia-unbind-sub').text('Нажмите ещё раз — устройство будет отвязано');
+                return;
+            }
+            el.find('.rmedia-unbind-sub').text('Отвязываем…');
+            rmUnbindDevice(ref);
+        });
+    }
+    async function rmUnbindDevice(ref) {
+        rmUnbinding = true;
+        try {
+            const device = detectDeviceInfo();
+            const r = await fetch(remoteApi() + '/v1/client/heartbeat?_=' + Date.now(), {
+                method: 'POST',
+                cache: 'no-store',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    id: remoteClientId(), key: remoteClientKey(), unbind: ref,
+                    install_id: device.install_id,
+                    device_name: device.device_name,
+                    platform: device.platform,
+                    user_agent: device.user_agent
+                })
+            });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const data = await r.json();
+            if (!data || !data.status) throw new Error('bad response');
+            remoteOverlaySignature = '';
+            applyRemoteStatus(data);
+            if (data.device_allowed !== false) { try { Lampa.Noty.show('Готово: старое устройство отвязано, это подключено'); } catch (e) {} }
+        } catch (e) {
+            try { Lampa.Noty.show('Не удалось отвязать. Проверьте интернет и попробуйте ещё раз.'); } catch (e2) {}
+            remoteOverlaySignature = '';
+            if (remoteData) renderRemoteStatus(remoteData);
+        } finally { rmUnbinding = false; }
+    }
+
+    function rmBindReleaseButton(root) {
+        let releaseArmed = 0;
+        let releaseLastEvent = 0;
+        root.find('.rmedia-release').on('hover:enter.rmedia click.rmedia', function (e) {
+            if (e && e.preventDefault) e.preventDefault();
+            if (e && e.stopPropagation) e.stopPropagation();
+            // Мышь и палец дают сразу click и hover:enter — считаем это одним нажатием,
+            // иначе подтверждение «проскакивает» и Лампа отвязывается с одного щелчка.
+            if (Date.now() - releaseLastEvent < 600) return;
+            releaseLastEvent = Date.now();
+            const el = $(this);
+            if (Date.now() - releaseArmed < 8000) { el.text('Возвращаем обычную Лампу…'); rmReleaseLampa(); return; }
+            releaseArmed = Date.now();
+            el.text('Нажмите ещё раз для подтверждения');
+            setTimeout(function () { if (Date.now() - releaseArmed >= 8000) el.text('Вернуть обычную Лампу'); }, 8100);
+        });
+    }
+
+    function rmReleaseLampa() {
+        if (rmReleasing) return;
+        rmReleasing = true;
+        // CUB-аккаунт @rmediahub.app — это аккаунт администратора, из его облака
+        // приходят наши расширения. Выходим из него. Свой CUB клиента не трогаем.
+        try {
+            let email = '';
+            try { email = String((Lampa.Account.Permit.account || {}).email || ''); } catch (e) {}
+            if (!email) email = String(Lampa.Storage.get('account_email', '') || '');
+            if (/@rmediahub\.app$/i.test(email)) {
+                ['account', 'account_user', 'account_email', 'account_notice', 'account_bookmarks', 'account_plugins']
+                    .forEach(function (k) { Lampa.Storage.set(k, '', true); });
+                Lampa.Storage.set('account_use', false, true);
+            }
+        } catch (e) {}
+        // «Только ТВ» (ТЕСТ ТВ): человек пришёл со своей Лампой — убираем только наши расширения.
+        const keepForeign = rmReleaseKeep || rmIsTvOnly();
+        if (keepForeign) {
+            const ours = function (p) { return !!(p && /rmediahub/i.test(String(p.url || ''))); };
+            try { Lampa.Plugins.get().forEach(function (p) { if (ours(p)) Lampa.Plugins.remove(p); }); } catch (e) {}
+            try {
+                const list = Lampa.Storage.get('plugins', '[]') || [];
+                if (Array.isArray(list)) Lampa.Storage.set('plugins', list.filter(function (p) { return !ours(p); }), true);
+            } catch (e) {}
+        } else {
+        // Чистая Лампа: все расширения ставились нами (настройка «под ключ»).
+        try { Lampa.Plugins.get().forEach(function (p) { Lampa.Plugins.remove(p); }); } catch (e) {}
+        try { Lampa.Storage.set('plugins', [], true); } catch (e) {}
+        }
+        try { rmApplyIptv(''); } catch (e) {}
+        try {
+            const drop = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (/^rmedia|^rmediahub\./.test(k)) drop.push(k);
+            }
+            drop.forEach(function (k) { localStorage.removeItem(k); });
+        } catch (e) {}
+        const onOurApp = /(^|\.)rmediahub\.cc$/i.test(location.hostname);
+        setTimeout(function () {
+            if (onOurApp) {
+                try { localStorage.setItem('rmedia_released', '1'); } catch (e) {}
+                window.location.href = keepForeign ? 'http://lampa.mx/?rmrelease=1&rmkeep=1#rmrelease=1&rmkeep=1'
+                                                   : 'http://lampa.mx/?rmrelease=1#rmrelease=1';
+            } else {
+                try { sessionStorage.removeItem('rmedia_release_req'); sessionStorage.removeItem('rmedia_release_keep'); } catch (e) {}
+                window.location.replace(location.protocol + '//' + location.host + location.pathname);
+            }
+        }, 800);
+    }
+    // ===== /Вернуть обычную Лампу =====
+
+    // Тариф «только ТВ» (его получает клиент на ТЕСТ ТВ): в Лампе остаётся один раздел — ТВ.
+    function rmIsTvOnly() {
+        try { return localStorage.getItem('rmedia_tariff') === 'tv'; } catch (e) { return false; }
+    }
+
+    // Тариф из админки: ultimate (по умолчанию), server_plus, basic или tv. При смене тарифа
+    // меняется набор плагинов Лампы RMediaHub — один перезапуск.
+    function rmApplyTariff(t) {
+        t = (t === 'basic' || t === 'server_plus' || t === 'tv') ? t : 'ultimate';
+        let prev = 'ultimate';
+        try { prev = localStorage.getItem('rmedia_tariff') || 'ultimate'; } catch (e) {}
+        if (prev === t) return;
+        try { localStorage.setItem('rmedia_tariff', t); } catch (e) { return; }
+        const label = t === 'basic' ? 'BASIC' : t === 'server_plus' ? 'SERVER PLUS' : t === 'tv' ? 'ТВ' : 'ULTIMATE';
+        try { Lampa.Noty.show('Тариф ' + label + ' — применяем настройки…'); } catch (e) {}
+        setTimeout(function () { window.location.reload(); }, 2500);
+    }
+
+    // Адреса TorrServer (основной и дополнительный) — для BASIC общий бесплатный сервер.
+    function rmApplyTorrServerPair(ts) {
+        if (!ts || typeof ts !== 'object') return;
+        const ok = /^[a-z0-9.-]+(:\d{1,5})?$/i;
+        try {
+            if (ts.main && ok.test(ts.main) && String(Lampa.Storage.get('torrserver_url', '')) !== ts.main) Lampa.Storage.set('torrserver_url', ts.main);
+            if (typeof ts.extra === 'string' && (ts.extra === '' || ok.test(ts.extra)) &&
+                String(Lampa.Storage.get('torrserver_url_two', '')) !== ts.extra) Lampa.Storage.set('torrserver_url_two', ts.extra);
+            if (ts.main && String(Lampa.Storage.get('torrserver_use_link', 'one')) !== 'one') Lampa.Storage.set('torrserver_use_link', 'one');
+        } catch (e) {}
+    }
+
+    // Android: всегда включаем «Встроенный клиент» TorrServer.
+    // Если он выключен, Лампа отдаёт торрент внешнему Android-приложению
+    // и клиент видит «нет плееров для воспроизведения».
+    // Flash-торренты (плагин TSArea нашего сервера): у всех, кто сидит на нашем сервере,
+    // переключатель держим включённым. Код плагина TSArea нам недоступен, поэтому находим
+    // переключатель по названию среди настроек Лампы и включаем то, что нашли.
+    let rmFlashKeys = null;
+    function rmForceFlash() {
+        try {
+            if (!window.Lampa || !Lampa.Storage || !Lampa.SettingsApi || !Lampa.SettingsApi.allParams) return;
+            if (!remoteClean(remoteGet(RM_TS_KEY, ''))) return; // своего сервера нет
+            if (!rmFlashKeys || !rmFlashKeys.length) {
+                const all = Lampa.SettingsApi.allParams() || {};
+                const keys = [];
+                Object.keys(all).forEach(function (component) {
+                    (all[component] || []).forEach(function (p) {
+                        if (!p || !p.param || !p.field || p.param.type !== 'trigger' || !p.param.name) return;
+                        if (/^\s*flash[\s-]*торрент/i.test(String(p.field.name || '').replace(/<[^>]*>/g, ''))) keys.push(String(p.param.name));
+                    });
+                });
+                rmFlashKeys = keys;
+            }
+            rmFlashKeys.forEach(function (key) {
+                const v = Lampa.Storage.get(key, '');
+                if (v !== true && v !== 'true') Lampa.Storage.set(key, true);
+            });
+        } catch (e) {}
+    }
+    function rmForceInternalTorrClient() {
+        try {
+            if (!window.Lampa || !Lampa.Storage || !Lampa.Platform || !Lampa.Platform.is('android')) return;
+            const v = Lampa.Storage.get('internal_torrclient', false);
+            if (v !== true && v !== 'true') Lampa.Storage.set('internal_torrclient', true);
+        } catch (e) {}
+    }
+    function applyRemoteConfig(cfg) {
+        rmForceInternalTorrClient();
+        rmForceFlash(); // срабатывает при каждой проверке доступа (раз в минуту)
+        if (!cfg || typeof cfg !== 'object') return;
+        try {
+            if (typeof cfg.tariff === 'string') rmApplyTariff(cfg.tariff);
+            if (cfg.app_url) { rmMoveTo(cfg.app_url); if (rmMoving) return; }
+            if (cfg.torrserver) {
+                // BASIC + свой сервер: свой — основной, общий BASIC — запасной (дополнительная ссылка).
+                // Раньше общий сервер каждую минуту на миг перезаписывал основной.
+                const own = /^http:\/\/([a-z0-9.-]+(:\d{1,5})?)\/p$/i.exec(typeof cfg.ts_plugin === 'string' ? cfg.ts_plugin : '');
+                if (own) {
+                    const shared = cfg.torrserver.main && cfg.torrserver.main !== own[1] ? cfg.torrserver.main : (cfg.torrserver.extra || '');
+                    rmApplyTorrServerPair({ main: own[1], extra: shared });
+                } else {
+                    rmApplyTorrServerPair(cfg.torrserver);
+                }
+            }
+            if (cfg.filmix) rmApplySharedKey('filmix', cfg.filmix);
+            if (cfg.kinopub) rmApplySharedKey('kinopub', cfg.kinopub);
+            if (typeof cfg.ts_plugin === 'string') {
+                const prev = remoteClean(remoteGet(RM_TS_KEY, ''));
+                if (prev !== cfg.ts_plugin || !rmTsLoaded) rmEnsureTsExtension(cfg.ts_plugin, prev !== cfg.ts_plugin ? prev : '');
+                remoteSet(RM_TS_KEY, cfg.ts_plugin);
+                rmApplyTorrServer(cfg.ts_plugin);
+            }
+            if (typeof cfg.iptv_playlist === 'string') {
+                rmApplyIptv(cfg.iptv_playlist);
+                rmtvSetEnabled(!!cfg.iptv_playlist);
+            }
+            rmvodSetEnabled(cfg.vod === true);
+        } catch (e) { console.warn('[RMEDIA] config apply failed', e); }
+    }
+    // ===== /RMEDIAHUB CONFIG =====
+
+    function applyRemoteStatus(data) {
+        if (!data || !data.status) return;
+        // Администратор нажал «Отвязать» — возвращаем обычную Лампу.
+        if (data.release === true) { rmReleaseLampa(); return; }
+        // config не храним в кеше статуса — применяем сразу.
+        const cfg = data.config;
+        delete data.config;
+        if (cfg && data.status === 'active' && data.device_allowed !== false) applyRemoteConfig(cfg);
+        data._received_at = Date.now();
+        data._scope = remoteScope();
+        remoteData = data;
+        remoteSet(REMOTE_CACHE_KEY, JSON.stringify(data));
+        remoteSet(REMOTE_CACHE_TIME_KEY, String(Date.now()));
+        renderRemoteStatus(data);
+    }
+
+    function renderRemoteStatus(data) {
+        if (!data) return;
+        if (!remoteScopeMatches(data._scope)) {
+            remoteData = null;
+            removeRemoteOverlay();
+            return;
+        }
+
+        // A test expires locally at its exact server timestamp, even offline.
+        // Исключение: тест запущен у клиента BASIC (return_tariff). Экран «тест завершён» ему не
+        // показываем — при следующей проверке (до минуты) сервер сам вернёт его на BASIC.
+        const backToBasic = !!(data.test && data.test.return_tariff === 'basic' && data.status === 'active');
+        if (data.test && !data.test.converted_at && data.status !== 'blocked' && !backToBasic &&
+            remoteNow(data) >= Date.parse(data.test.ends_at)) {
+            showRemoteOverlay('expired', data.test.kind === 'tv' ? 'ТЕСТ ТВ завершён.' : 'ULTIMATE TEST завершён.', data);
+            return;
+        }
+        if (data.device_allowed === false) {
+            showRemoteOverlay(data.test_repeat_detected ? 'blocked' : 'device_limit',
+                data.message || 'Достигнут лимит устройств. Обратитесь к администратору.', data);
+            return;
+        }
+        const last = Number(data._received_at);
+        const liveTest = data.test && !data.test.converted_at && remoteNow(data) < Date.parse(data.test.ends_at);
+        if (data.status === 'active' && !liveTest && last && Date.now() - last > REMOTE_GRACE_MS) {
+            showRemoteOverlay('blocked', 'Не удалось подтвердить статус доступа. Повторите позже.', data);
+            return;
+        }
+        if (data.status === 'active') { removeRemoteOverlay(); if (!data.test) rmExpiryReminder(data); else if (liveTest) rmTvTestNotice(data); }
+        else showRemoteOverlay(data.status, data.message || '', data);
+    }
+
+    function rmDrawOfferQr(contact) {
+        if (!remoteOverlay) return;
+        const box = remoteOverlay.find('.rmedia-qr');
+        if (!box.length || box.find('svg').length) return;
+        let drawn = false;
+        try {
+            if (window.Lampa && Lampa.Utils && typeof Lampa.Utils.qrcode === 'function' && typeof window.qrcode === 'function' &&
+                /^https?:\/\//i.test(String(contact || ''))) {
+                Lampa.Utils.qrcode(contact, box[0], function () {});
+                const svg = box.find('svg');
+                if (svg.length) { svg.css({ width: '100%', height: '100%', display: 'block' }); drawn = true; }
+            }
+        } catch (e) {}
+        remoteOverlay.find('.rmedia-qr-wrap').css('display', drawn ? '' : 'none');
+    }
+
+    // ТЕСТ ТВ: один раз за запуск напоминаем, до какого времени он действует.
+    let rmTvTestNoticeShown = false;
+    function rmTvTestNotice(data) {
+        if (rmTvTestNoticeShown || !data || !data.test || data.test.kind !== 'tv') return;
+        rmTvTestNoticeShown = true;
+        try {
+            const dt = new Date(data.test.ends_at);
+            if (!Number.isFinite(dt.getTime())) return;
+            const two = function (n) { return ('0' + n).slice(-2); };
+            const pack = data.test.package_label ? ' · ' + String(data.test.package_label) : '';
+            Lampa.Noty.show('ТЕСТ ТВ' + pack + ' — до ' + two(dt.getDate()) + '.' + two(dt.getMonth() + 1) + ', ' +
+                two(dt.getHours()) + ':' + two(dt.getMinutes()), { time: 8000 });
+        } catch (e) {}
+    }
+
+    // ===== Напоминание о конце подписки =====
+    // За 3 дня до окончания — окно по центру раз в день. Кнопка «OK» просто закрывает его.
+    const RM_EXPIRY_DAYS = 3;
+    let rmExpiryBox = null;
+    let rmExpiryPrevController = '';
+    function rmExpiryReminder(data) {
+        try {
+            if (rmExpiryBox || activationBusy || !data || !data.expires_at) return;
+            const end = Date.parse(data.expires_at);
+            if (!Number.isFinite(end)) return;
+            const left = end - remoteNow(data);
+            if (left <= 0 || left > RM_EXPIRY_DAYS * 864e5) return;
+            // Во время просмотра не мешаем — покажем при следующей проверке, когда плеер закрыт.
+            try { if (Lampa.Player && typeof Lampa.Player.opened === 'function' && Lampa.Player.opened()) return; } catch (e) {}
+            const today = new Date().toDateString();
+            const mark = today + '|' + data.expires_at;
+            if (localStorage.getItem('rmedia_expiry_notice') === mark) return;
+            localStorage.setItem('rmedia_expiry_notice', mark);
+
+            const d = new Date(end);
+            const pad = function (n) { return (n < 10 ? '0' : '') + n; };
+            const dateText = pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear();
+            const days = Math.ceil(left / 864e5);
+            const when = left < 864e5 ? 'заканчивается в течение суток' :
+                'заканчивается через ' + days + ' ' + (days === 1 ? 'день' : 'дня');
+            const contact = remoteContact(data).replace(/^https?:\/\//, '');
+
+            setTimeout(function () {
+                if (rmExpiryBox || remoteOverlay) return;
+                try { if (Lampa.Player && typeof Lampa.Player.opened === 'function' && Lampa.Player.opened()) { localStorage.removeItem('rmedia_expiry_notice'); return; } } catch (e) {}
+                try { rmExpiryPrevController = (Lampa.Controller.enabled() || {}).name || 'content'; } catch (e) {}
+                rmExpiryBox = $('<div class="rmedia-remote-lock rmedia-expiry"></div>');
+                rmExpiryBox.css({ position: 'fixed', top: '0', left: '0', right: '0', bottom: '0', width: '100%', height: '100%', boxSizing: 'border-box', zIndex: '999998', background: 'rgba(5,8,15,.82)', color: '#fff',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px', textAlign: 'center' });
+                rmExpiryBox.html(
+                    '<div style="max-width:680px;background:#0d1424;border:2px solid #8ab4ff;border-radius:20px;padding:34px 40px">' +
+                        '<div style="font-size:36px;font-weight:700;margin-bottom:16px">RMEDIAHUB</div>' +
+                        '<div style="font-size:26px;margin-bottom:8px">Ваша подписка ' + remoteEscape(when) + '</div>' +
+                        '<div style="font-size:20px;opacity:.8;margin-bottom:18px">Доступ до ' + remoteEscape(dateText) + '</div>' +
+                        '<div style="font-size:20px;opacity:.85">Чтобы продлить, напишите администратору:</div>' +
+                        '<div style="font-size:24px;margin:6px 0 26px">' + remoteEscape(contact) + '</div>' +
+                        '<a class="rmedia-expiry-ok selector" tabindex="0" role="button" style="display:inline-block;padding:12px 48px;' +
+                            'border:2px solid #8ab4ff;border-radius:12px;color:#8ab4ff;font-weight:600;font-size:20px;cursor:pointer">OK</a>' +
+                    '</div>'
+                );
+                $('body').append(rmExpiryBox);
+                const close = function (e) {
+                    if (e && e.preventDefault) e.preventDefault();
+                    if (!rmExpiryBox) return;
+                    rmExpiryBox.remove();
+                    rmExpiryBox = null;
+                    try { Lampa.Controller.toggle(rmExpiryPrevController || 'content'); } catch (err) {}
+                };
+                rmExpiryBox.find('.rmedia-expiry-ok').on('hover:enter.rmedia click.rmedia', close);
+                try {
+                    Lampa.Controller.add('rmedia_expiry', {
+                        toggle: function () {
+                            if (!rmExpiryBox) return;
+                            Lampa.Controller.collectionSet(rmExpiryBox);
+                            Lampa.Controller.collectionFocus(rmExpiryBox.find('.rmedia-expiry-ok')[0], rmExpiryBox);
+                        },
+                        back: close, up: function () {}, down: function () {}, left: function () {}, right: function () {}
+                    });
+                    Lampa.Controller.toggle('rmedia_expiry');
+                } catch (e) {}
+            }, 4000);
+        } catch (e) {}
+    }
+    // ===== /Напоминание =====
+
+    // ===== ACTIVATION (fail-closed) =====
+    let activationBusy = false;
+
+    function activationInput(title, password, done) {
+        try {
+            Lampa.Input.edit({ title: title, value: '', free: true, nosave: true, nomic: true, password: !!password },
+                function (value) { done(String(value || '').trim()); });
+        } catch (e) {
+            const v = window.prompt(title);
+            done(v === null ? '' : String(v).trim());
+        }
+    }
+
+    async function tryActivate(id, key) {
+        const device = detectDeviceInfo();
+        const r = await fetch(remoteApi() + '/v1/client/heartbeat?_=' + Date.now(), {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                id: id, key: key,
+                install_id: device.install_id,
+                device_name: device.device_name,
+                platform: device.platform,
+                user_agent: device.user_agent
+            })
+        });
+        if (r.status === 401 || r.status === 403 || r.status === 404) return { ok: false, reason: 'Неверный Client ID или ключ' };
+        if (!r.ok) return { ok: false, reason: 'Сервер недоступен (HTTP ' + r.status + '). Повторите позже.' };
+        const data = await r.json();
+        if (!data || data.id !== id || !data.status) return { ok: false, reason: 'Некорректный ответ сервера' };
+        return { ok: true, data: data };
+    }
+
+    // Клавиатура Лампы рисуется ниже нашего экрана (z-index), поэтому
+    // на время ввода прячем экран блокировки и всегда возвращаем его обратно.
+    let activationGuardTimer = null;
+    function hideOverlayForInput() {
+        if (remoteOverlay) remoteOverlay.css('display', 'none');
+        clearTimeout(activationGuardTimer);
+        activationGuardTimer = setTimeout(function () {
+            activationBusy = false;
+            restoreOverlayAfterInput();
+            checkRemoteStatus();
+        }, 3 * 60 * 1000);
+    }
+    function restoreOverlayAfterInput() {
+        clearTimeout(activationGuardTimer);
+        if (remoteOverlay) remoteOverlay.css('display', 'flex');
+        focusRemoteOverlay();
+    }
+
+    async function activateByCode(code) {
+        // Код проверяется через тот же адрес, что и обычная проверка доступа:
+        // Cloudflare пропускает с сайтов Lampa только его.
+        const device = detectDeviceInfo();
+        const r = await fetch(remoteApi() + '/v1/client/heartbeat?_=' + Date.now(), {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                code: code,
+                install_id: device.install_id,
+                device_name: device.device_name,
+                platform: device.platform,
+                user_agent: device.user_agent
+            })
+        });
+        if (r.status === 429) return { ok: false, reason: 'Слишком много попыток. Повторите через час.' };
+        if (r.status === 404) return { ok: false, reason: 'Неверный или просроченный код. Попросите новый у администратора.' };
+        if (!r.ok) return { ok: false, reason: 'Сервер недоступен (HTTP ' + r.status + '). Повторите позже.' };
+        const data = await r.json();
+        if (!data || !data.id || !data.status) return { ok: false, reason: 'Некорректный ответ сервера' };
+        if (data.device_allowed === false && !data.client_key) return { ok: false, reason: data.message || 'Достигнут лимит устройств. Обратитесь к администратору.' };
+        if (!data.client_key) return { ok: false, reason: 'Сервер не подтвердил код. Обновите плагин.' };
+        return { ok: true, data: data };
+    }
+
+    async function finishActivation(id, key) {
+        try { Lampa.Noty.show('Проверяем доступ…'); } catch (e) {}
+        try {
+            const res = await tryActivate(id, key);
+            if (!res.ok) {
+                showActivationOverlay(res.reason);
+                return;
+            }
+            // Сохраняем только проверенную сервером пару.
+            remoteSet(REMOTE_ID_KEY, id);
+            remoteSet(REMOTE_KEY_KEY, key);
+            applyRemoteStatus(res.data);
+            try { Lampa.Noty.show('Устройство активировано'); } catch (e) {}
+        } catch (e) {
+            showActivationOverlay('Не удалось связаться с сервером. Проверьте интернет.');
+        } finally {
+            activationBusy = false;
+        }
+    }
+
+    function startActivation() {
+        if (activationBusy) return;
+        activationBusy = true;
+        hideOverlayForInput();
+        // Обычный путь: 8 цифр из админки. Запасной: Client ID (RM-…) + ключ.
+        activationInput('Код активации (8 цифр)', false, function (value) {
+            value = String(value || '').trim();
+            if (!value) { activationBusy = false; restoreOverlayAfterInput(); return; }
+            const digits = value.replace(/\D/g, '');
+            if (/^RM-/i.test(value)) {
+                const id = value.toUpperCase();
+                activationInput('Client Key', true, function (key) {
+                    if (!key) { activationBusy = false; restoreOverlayAfterInput(); return; }
+                    restoreOverlayAfterInput();
+                    finishActivation(id, key);
+                });
+                return;
+            }
+            restoreOverlayAfterInput();
+            if (digits.length !== 8) {
+                activationBusy = false;
+                showActivationOverlay('Код должен состоять из 8 цифр.');
+                return;
+            }
+            try { Lampa.Noty.show('Проверяем код…'); } catch (e) {}
+            activateByCode(digits).then(function (res) {
+                activationBusy = false;
+                if (!res.ok) {
+                    showActivationOverlay(res.reason);
+                    return;
+                }
+                const data = res.data;
+                remoteSet(REMOTE_ID_KEY, String(data.id));
+                remoteSet(REMOTE_KEY_KEY, String(data.client_key));
+                delete data.client_key;
+                applyRemoteStatus(data);
+                if (data.device_allowed !== false) { try { Lampa.Noty.show('Устройство активировано'); } catch (e) {} }
+                // Лампа RMediaHub до активации грузила только этот экран —
+                // перезапускаем, чтобы подтянулись все плагины.
+                try {
+                    if (localStorage.getItem('rmedia_light_start') === '1') {
+                        localStorage.removeItem('rmedia_light_start');
+                        setTimeout(function () { window.location.reload(); }, 2500);
+                    }
+                } catch (e) {}
+            }).catch(function () {
+                activationBusy = false;
+                showActivationOverlay('Не удалось связаться с сервером. Проверьте интернет.');
+            });
+        });
+    }
+
+    function showActivationOverlay(message) {
+        const signature = JSON.stringify(['activation', message]);
+        if (!remoteOverlay) {
+            try {
+                const origin = Lampa.Controller.enabled();
+                remoteOriginController = origin && origin.name || 'content';
+            } catch(e) {}
+            remoteOverlay = $('<div class="rmedia-remote-lock"></div>');
+            remoteOverlay.css({
+                position: 'fixed', top: '0', left: '0', right: '0', bottom: '0', width: '100%', height: '100%', boxSizing: 'border-box', zIndex: '999999', background: '#090909', color: '#fff',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px', textAlign: 'center'
+            });
+            remoteOverlay.attr('role', 'dialog').attr('aria-modal', 'true');
+            $('body').append(remoteOverlay);
+        }
+        if (signature === remoteOverlaySignature) { focusRemoteOverlay(); return; }
+        remoteOverlaySignature = signature;
+        const contact = remoteContact(null);
+        const btn = 'display:inline-block;margin:8px;padding:14px 20px;border:2px solid #8ab4ff;border-radius:12px;color:#8ab4ff;font-weight:600;';
+        remoteOverlay.html(
+            '<div style="max-width:720px">' +
+                '<div style="font-size:42px;font-weight:700;margin-bottom:18px">RMEDIAHUB</div>' +
+                '<div style="font-size:28px;margin-bottom:12px">Устройство не активировано</div>' +
+                '<div style="font-size:20px;opacity:.75;margin-bottom:10px">' +
+                    remoteEscape(message || 'Введите код активации из 8 цифр.') + '</div>' +
+                '<div style="font-size:18px;margin-top:26px">' +
+                    '<a class="rmedia-activate selector" tabindex="0" role="button" style="cursor:pointer;' + btn + '">Ввести код активации</a>' +
+                    '<div style="margin-top:22px;font-size:20px;opacity:.75">Нет кода? Свяжитесь с администратором:</div>' +
+                    '<div style="margin-top:6px;font-size:22px;overflow-wrap:anywhere">' + remoteEscape(contact.replace(/^https?:\/\//, '')) + '</div>' +
+                    '<div style="margin-top:34px">' +
+                        '<a class="rmedia-release selector" tabindex="0" role="button" ' +
+                        'style="display:inline-block;padding:10px 16px;border:2px solid rgba(255,255,255,.45);border-radius:12px;color:rgba(255,255,255,.8);font-size:17px;cursor:pointer">Вернуть обычную Лампу</a>' +
+                    '</div>' +
+                '</div>' +
+            '</div>'
+        );
+        rmBindReleaseButton(remoteOverlay);
+        remoteOverlay.find('.rmedia-activate').on('hover:enter.rmedia click.rmedia', function (e) {
+            if (e && e.preventDefault) e.preventDefault();
+            if (e && e.stopPropagation) e.stopPropagation();
+            setTimeout(startActivation, 0);
+        });
+        focusRemoteOverlay();
+    }
+    // ===== /ACTIVATION =====
+
+    async function checkRemoteStatus() {
+        const id = remoteClientId();
+        const key = remoteClientKey();
+
+        // Fail-closed: без привязки контент закрыт, показываем экран активации.
+        // Раньше здесь был обход: сброс данных Лампы = бесплатный доступ.
+        if (!id || !key) { remoteData = null; if (!activationBusy) showActivationOverlay(''); return; }
+        if (remoteChecking) return;
+
+        const device = detectDeviceInfo();
+        let requestScope = '';
+        let timeout = null;
+        let abort = null;
+        remoteChecking = true;
+        try {
+            requestScope = remoteScope();
+            const url = remoteApi() + '/v1/client/heartbeat?_=' + Date.now();
+            if (typeof AbortController !== 'undefined') {
+                abort = new AbortController();
+                timeout = setTimeout(function () { abort.abort(); }, 10000);
+            }
+            const r = await fetch(url, {
+                method: 'POST',
+                cache: 'no-store',
+                headers: {'Content-Type':'application/json'},
+                signal: abort ? abort.signal : undefined,
+                body: JSON.stringify({
+                    id: id,
+                    key: key,
+                    install_id: device.install_id,
+                    device_name: device.device_name,
+                    platform: device.platform,
+                    user_agent: device.user_agent
+                })
+            });
+            if (requestScope !== remoteScope()) return;
+            if (r.status === 401 || r.status === 403 || r.status === 404) {
+                remoteData = null;
+                remoteSet(REMOTE_CACHE_KEY, 'null');
+                showActivationOverlay('Клиент не найден или ключ доступа изменён. Введите актуальный код доступа.');
+                return;
+            }
+            if (!r.ok) throw new Error('HTTP '+r.status);
+            const data = await r.json();
+            if (!data || data.id !== id || !data.status) throw new Error('Invalid RMEDIA response');
+            if (requestScope !== remoteScope()) return;
+            applyRemoteStatus(data);
+        } catch(e) {
+            console.warn('[RMEDIA Remote] status check failed', e);
+
+            let cached = null;
+            try { cached = JSON.parse(remoteGet(REMOTE_CACHE_KEY,'null')); } catch(e2) {}
+            try {
+                if (cached && remoteScopeMatches(cached._scope)) {
+                    remoteData = cached;
+                    renderRemoteStatus(cached);
+                } else if (!requestScope) {
+                    showRemoteOverlay('blocked', 'Проверьте адрес RMEDIA API в админских настройках.');
+                }
+            } catch(e2) {
+                showRemoteOverlay('blocked', 'Проверьте адрес RMEDIA API в админских настройках.');
+            }
+        } finally {
+            if (timeout) clearTimeout(timeout);
+            remoteChecking = false;
+        }
+    }
+
+    function addRemoteAdminSettings() {
+        if (!window.Lampa || !Lampa.SettingsApi) return;
+
+        try {
+            let oldId = Lampa.Storage.get(REMOTE_ID_KEY, 'не задано');
+            let oldKey = Lampa.Storage.get(REMOTE_KEY_KEY, 'не задано');
+
+            if (oldId === undefined || oldId === null || String(oldId) === 'undefined')
+                Lampa.Storage.set(REMOTE_ID_KEY, 'не задано');
+
+            if (oldKey === undefined || oldKey === null || String(oldKey) === 'undefined')
+                Lampa.Storage.set(REMOTE_KEY_KEY, 'не задано');
+        } catch(e) {}
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
+            param: { name: REMOTE_API_KEY, type: 'input', values: '', default: '' },
+            field: {
+                name: 'RMEDIA API URL',
+                description: 'Полный проверенный адрес сервера. Пусто — адрес из сборки.'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
+            param: { name: REMOTE_ID_KEY, type: 'input', values: '', default: 'не задано' },
+            field: {
+                name: 'RMEDIA Client ID',
+                description: 'Например RM-1A2B3C4D'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
+            param: { name: REMOTE_KEY_KEY, type: 'input', values: '', default: 'не задано' },
+            field: {
+                name: 'RMEDIA Client Key',
+                description: 'Секретный ключ клиента из панели RMEDIA Control'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'rmedia_lock',
+            param: { name: REMOTE_INSTALL_ID_KEY, type: 'input', values: '', default: '' },
+            field: {
+                name: 'RMEDIA Installation ID',
+                description: 'Уникальный ID этой установки. Создаётся автоматически.'
+            }
+        });
+
+        // Для администратора: ключ привязки Filmix/KinoPub → в админку, раздел «Аккаунты».
+        ['filmix', 'kinopub'].forEach(function (service) {
+            const title = service === 'filmix' ? 'Filmix' : 'KinoPub';
+            Lampa.SettingsApi.addParam({
+                component: 'rmedia_lock',
+                param: { name: 'rmedia_copy_key_' + service, type: 'button' },
+                field: {
+                    name: 'Скопировать ключ ' + title,
+                    description: 'Для админки → АККАУНТЫ. Сначала привяжите ' + title + ' в его плагине.'
+                },
+                onChange: function () { rmCopySharedKey(service, title); }
+            });
+        });
+    }
+
+    function rmCopyText(text) {
+        try {
+            const t = document.createElement('textarea');
+            t.value = text;
+            t.setAttribute('readonly', '');
+            t.style.cssText = 'position:fixed;left:-9999px;top:0';
+            document.body.appendChild(t);
+            t.select();
+            const ok = document.execCommand('copy');
+            t.remove();
+            return ok;
+        } catch (e) { return false; }
+    }
+
+    function rmCopySharedKey(service, title) {
+        let s = null;
+        try { s = JSON.parse(localStorage.getItem(RM_SHARED_KEYS[service]) || 'null'); } catch (e) {}
+        const key = s && /^[a-f0-9]{64}$/.test(String(s.key || '')) ? s.key : '';
+        if (!key) { try { Lampa.Noty.show(title + ': ключа нет. Сначала привяжите ' + title + ' в его плагине.', { time: 8000 }); } catch (e) {} return; }
+        const ok = rmCopyText(key);
+        try {
+            Lampa.Noty.show(ok ? title + ': ключ скопирован (' + key.slice(0, 6) + '…' + key.slice(-4) + '). Вставьте его в админке.'
+                               : title + ': не удалось скопировать. Ключ: ' + key, { time: 12000 });
+        } catch (e) {}
+    }
+
+    function initRemoteControl() {
+        if (rmReleaseRequested) { rmReleaseLampa(); return; }
+        addRemoteAdminSettings();
+        try {
+            Lampa.Controller.add('rmedia_remote_lock', {
+                invisible: true,
+                toggle: function () {
+                    if (!remoteOverlay) return;
+                    Lampa.Controller.collectionSet(remoteOverlay);
+                    Lampa.Controller.collectionFocus(false, remoteOverlay);
+                },
+                back: focusRemoteOverlay,
+                up: function () { moveRemoteFocus('up'); },
+                down: function () { moveRemoteFocus('down'); },
+                left: function () { moveRemoteFocus('left'); },
+                right: function () { moveRemoteFocus('right'); }
+            });
+        } catch(e) {}
+        // Сторож пульта: пока экран блокировки виден, Лампа (главный экран,
+        // который догружается позже) не должна забирать себе пульт.
+        // Во время ввода кода (activationBusy / экран спрятан) не вмешиваемся.
+        try {
+            Lampa.Controller.listener.follow('toggle', function (e) {
+                if (!remoteOverlay || activationBusy) return;
+                if (!e || e.name === 'rmedia_remote_lock') return;
+                if (remoteOverlay.css('display') === 'none') return;
+                setTimeout(function () {
+                    if (remoteOverlay && !activationBusy && remoteOverlay.css('display') !== 'none') focusRemoteOverlay();
+                }, 0);
+            });
+        } catch(e) {}
+        // TS-плагин клиента из админки — при каждом запуске.
+        try {
+            const ts = remoteClean(remoteGet(RM_TS_KEY, ''));
+            if (ts) { rmEnsureTsExtension(ts, ''); rmApplyTorrServer(ts); }
+        } catch(e) {}
+        try {
+            const cached = JSON.parse(remoteGet(REMOTE_CACHE_KEY, 'null'));
+            if (cached && cached._scope === remoteScope()) {
+                remoteData = cached;
+                renderRemoteStatus(cached);
+            }
+        } catch(e) {}
+        checkRemoteStatus();
+
+        if (remoteTimer) clearInterval(remoteTimer);
+        remoteTimer = setInterval(checkRemoteStatus, 60 * 1000);
+        if (remoteClockTimer) clearInterval(remoteClockTimer);
+        remoteClockTimer = setInterval(function () {
+            try { if (remoteData) renderRemoteStatus(remoteData); } catch(e) {}
+        }, 1000);
+
+        // Re-check when app returns to foreground / tab.
+        document.addEventListener('visibilitychange', function(){
+            if (!document.hidden) checkRemoteStatus();
+        });
+    }
+    // ===== /RMEDIA REMOTE CONTROL v11 =====
+
+    function hideClientHeadExtras() {
+        if (unlocked || rmIsBasic()) return;
+
+        try {
+            $('.open--profile, .open--console, .open--terminal, .head__action[data-action="console"], .head__action[data-action="terminal"]').hide();
+
+            $('.head__action').each(function () {
+                const el = $(this);
+                if (el.attr('data-rmedia-sync-head') === '1') return;
+
+                const fingerprint = [
+                    el.attr('class') || '',
+                    el.attr('title') || '',
+                    el.attr('data-action') || '',
+                    el.html() || ''
+                ].join(' ').toLowerCase();
+
+                if (
+                    fingerprint.indexOf('console') >= 0 ||
+                    fingerprint.indexOf('terminal') >= 0 ||
+                    fingerprint.indexOf('sprite-console') >= 0 ||
+                    fingerprint.indexOf('sprite-terminal') >= 0
+                ) {
+                    el.hide();
+                }
+            });
+        } catch (e) {}
+    }
+
+    function guardConsoleController() {
+        if (!window.Lampa || !Lampa.Controller || Lampa.Controller.__rmedia_console_guard) return;
+
+        const originalToggle = Lampa.Controller.toggle.bind(Lampa.Controller);
+        if (!rawControllerToggle) rawControllerToggle = originalToggle;
+
+        Lampa.Controller.toggle = function (name) {
+            if (!unlocked && (name === 'console' || name === 'console-tabs' || name === 'console-body')) {
+                try {
+                    hideClientHeadExtras();
+                    Lampa.Noty && Lampa.Noty.show && Lampa.Noty.show('Недоступно в клиентском режиме');
+                } catch (e) {}
+                return;
+            }
+
+            try {
+                return originalToggle.apply(null, arguments);
+            } catch (err) {
+                // Битое состояние экрана (например, «Назад» на клавиатуре PIN на ТВ):
+                // не даём Лампе показать зелёное окно и зависнуть.
+                console.warn('[RMEDIA Lock] controller toggle failed', name, err);
+                try { $('body').removeClass('settings--open selectbox--open'); } catch (e) {}
+                if (name !== 'content') {
+                    try { return originalToggle('content'); } catch (e2) {}
+                }
+                try { return originalToggle('head'); } catch (e3) {}
+            }
+        };
+
+        Lampa.Controller.__rmedia_console_guard = true;
+    }
+
+    function installIphoneCardLayout() {
+        if (document.getElementById('rmedia-iphone-card-layout')) return;
+
+        const ua = navigator.userAgent || '';
+        const isiOS =
+            /iPhone|iPad|iPod/i.test(ua) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+        if (!isiOS) return;
+
+        const style = document.createElement('style');
+        style.id = 'rmedia-iphone-card-layout';
+        style.textContent = `
+            @media screen and (max-width: 700px) {
+                /* iPhone: показываем постер отдельной карточкой,
+                   а весь текст и кнопки — НИЖЕ, без наложения. */
+
+                .full-start-new__body {
+                    display: block !important;
+                }
+
+                .full-start-new__left {
+                    width: 58vw !important;
+                    max-width: 240px !important;
+                    min-width: 180px !important;
+                    margin: 0 auto 1.4em !important;
+                }
+
+                .full-start-new__poster {
+                    padding-bottom: 150% !important;
+                    background: transparent !important;
+                    border-radius: 1.2em !important;
+                    overflow: hidden !important;
+                }
+
+                .full-start-new__img {
+                    width: 100% !important;
+                    height: 100% !important;
+                    object-fit: cover !important;
+                    transform: none !important;
+                    border-radius: 1.2em !important;
+                    opacity: 1 !important;
+                }
+
+                .full-start-new__right {
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    position: static !important;
+                    z-index: auto !important;
+                    background: none !important;
+                    border-radius: 0 !important;
+                    overflow: visible !important;
+                }
+
+                .full-start-new__head,
+                .full-start-new__title,
+                .full-start-new__tagline,
+                .full-start-new__rate-line,
+                .full-start-new__details,
+                .full-start-new__reactions,
+                .full-start-new__buttons {
+                    position: static !important;
+                }
+
+                .full-start-new__title {
+                    -webkit-line-clamp: 3 !important;
+                    line-clamp: 3 !important;
+                    margin-top: 0 !important;
+                }
+
+                .full-start-new {
+                    padding-bottom: 1.5em !important;
+                }
+            }
+        `;
+
+        document.head.appendChild(style);
+    }
+
+    function installBackCrashGuard() {
+        // На Samsung после отмены PIN Лампа иногда оставляет активным уже
+        // закрытый экран «Расширения»; его «Назад» падает (destroy of null).
+        // Ловим именно этот случай и возвращаем на главный экран.
+        window.addEventListener('error', function (event) {
+            const msg = String(event && event.message || '');
+            if (!/reading '(destroy|length)'/.test(msg)) return;
+            const stack = String(event && event.error && event.error.stack || '');
+            if (!/onBack|toggle|Line\.|Main\./.test(stack + msg)) return;
+            try { event.preventDefault(); event.stopImmediatePropagation(); } catch (e) {}
+            setTimeout(safeHome, 0);
+        }, true);
+    }
+
+    // ===== RMEDIAHUB TV и ФИЛЬМОТЕКА (модуль rm-tv.js, приходит с сервера) =====
+    // Здесь только «розетка»: сам модуль с меню «ТВ» и «Фильмотека» сервер присылает
+    // вместе с остальными плагинами. Пока модуля нет, запоминаем, что нужно включить, —
+    // модуль прочитает это при подключении.
+    let rmTvModule = null;
+
+    function rmtvSetEnabled(on) {
+        if (rmTvModule) { rmTvModule.setEnabled(on); return; }
+        remoteSet('rmedia_tv_on', on ? '1' : '');
+    }
+
+    function rmvodSetEnabled(on) {
+        if (rmTvModule) { rmTvModule.vodSetEnabled(on); return; }
+        if ((remoteClean(remoteGet('rmedia_vod_on', '')) === '1') !== !!on) remoteSet('rmedia_vod_on', on ? '1' : '');
+    }
+
+    function rmtvMenu() { if (rmTvModule) rmTvModule.menu(); }
+    function rmvodMenu() { if (rmTvModule) rmTvModule.vodMenu(); }
+    function rmTvOnlyTick() { if (rmTvModule) rmTvModule.tvOnlyTick(); }
+    function rmtvInit() { if (rmTvModule) rmTvModule.init(); }
+
+    // Связь с сервером и память устройства — для модулей, которые присылает сервер.
+    window.RMLock = {
+        api: remoteApi, id: remoteClientId, key: remoteClientKey, device: detectDeviceInfo,
+        get: remoteGet, set: remoteSet, clean: remoteClean, isTvOnly: rmIsTvOnly,
+        overlay: function () { return remoteOverlay; },
+        attachTv: function (module) {
+            if (rmTvModule || !module) return;
+            rmTvModule = module;
+            try { module.init(); } catch (e) { console.warn('[RMEDIA TV] init failed', e); }
+        }
+    };
+    // ===== /RMEDIAHUB TV =====
+
+
+    // ===== СВОИ ПЛАГИНЫ С СЕРВЕРА =====
+    // Наши плагины (KinoPub, Filmix, главная и т.д.) Лампа получает от сервера RMediaHub:
+    // только с ключом клиента и только набор его тарифа. Последняя полученная копия
+    // хранится на устройстве и запускается сразу при старте — даже если связи нет.
+    // Новая версия скачивается в фоне и начинает работать со следующего запуска.
+    const RM_BUNDLE_VER_KEY = 'rmedia_bundle_version';
+    const RM_BUNDLE_DATA_KEY = 'rmedia_bundle_files';
+    const RM_BUNDLE_SYNC_MS = 15 * 60 * 1000;
+    const RM_BUNDLE_RETRY_MS = 15 * 1000;
+    const rmBundleRan = {};
+    let rmBundleBusy = false;
+    let rmBundleVersion = '';
+    const RM_BUNDLE_NOCACHE_KEY = 'rmedia_bundle_nocache';
+    // По этим меткам видно, что плагин реально заработал (и что запустили его именно мы).
+    const RM_BUNDLE_FLAGS = {
+        'rmediahub-filmix.js': 'rmediahub_filmix_loaded', 'rmediahub-kinopub.js': 'rmediahub_kinopub_direct_loaded',
+        'rtune.js': 'rtune_plugin_ready', 'rcomments.js': 'rmediahub_comments_ready', 'rtweaks.js': 'rmediahub_tweaks_ready',
+        'torrentstyles.js': 'rmediahub_torrents_ready', 'studios.js': 'rmediahub_studios_ready', 'autoparser.js': 'rmediahub_parser_ready',
+        'rm-upsell.js': 'rmedia_basic_upsell_ready', 'rm-tv.js': 'rmedia_tv_module_ready'
+    };
+    const rmBundleStat = { cached: 0, fetched: 0, started: 0, answer: 'ещё не отвечал' };
+
+    // Короткая строка для администратора (показывается после ввода PIN).
+    // «запущено с сервера» — сколько плагинов включилось именно из присланного сервером кода.
+    function rmBundleReport() {
+        let copy = 'копия на устройстве: ' + (rmBundleStat.cached ? 'есть' : 'нет');
+        if (!rmBundleCacheAllowed()) copy = 'копию здесь не храним';
+        // «запасной путь» — сколько плагинов пришлось взять по старому адресу (должно быть 0).
+        const spare = typeof window.rmedia_fallback_count === 'number' ? ', запасной путь: ' + window.rmedia_fallback_count : '';
+        return 'Плагины: запущено с сервера ' + rmBundleStat.started +
+            ', из копии ' + rmBundleStat.cached + ', скачано ' + rmBundleStat.fetched + spare +
+            ', ' + copy + ', сервер: ' + rmBundleStat.answer;
+    }
+
+    // Можно ли на этом устройстве хранить копию. На Apple TV память под такие записи крошечная,
+    // а приложение показывает клиенту красную ошибку при каждой неудачной попытке — там не пробуем вовсе.
+    // Где попытка однажды не удалась, запоминаем это короткой меткой и больше не пробуем.
+    function rmBundleCacheAllowed() {
+        try { if (String(location.protocol) === 'file:') return false; } catch (e) {}
+        try { if (/iPad; CPU iPhone OS|AppleTV|tvOS/i.test(String(navigator.userAgent || ''))) return false; } catch (e) {}
+        try { if (window.Lampa && Lampa.Platform && typeof Lampa.Platform.is === 'function' && Lampa.Platform.is('apple_tv')) return false; } catch (e) {}
+        // Метка «здесь не вышло» действует неделю: память могла освободиться, а копия — стать меньше.
+        try {
+            const mark = localStorage.getItem(RM_BUNDLE_NOCACHE_KEY);
+            if (mark) {
+                const since = parseInt(mark, 10) || 0;
+                if (since > 1000 && Date.now() - since < 7 * 24 * 3600 * 1000) return false;
+                localStorage.removeItem(RM_BUNDLE_NOCACHE_KEY);
+            }
+        } catch (e) { return false; }
+        return true;
+    }
+
+    function rmBundleNoCache() {
+        rmBundleDrop();
+        try { localStorage.setItem(RM_BUNDLE_NOCACHE_KEY, String(Date.now())); } catch (e) {}
+    }
+
+    function rmBundleRun(files) {
+        (files || []).forEach(function (f) {
+            if (!f || typeof f.name !== 'string' || typeof f.code !== 'string') return;
+            if (f.name === 'lock.js' || rmBundleRan[f.name]) return; // сам lock.js уже работает
+            rmBundleRan[f.name] = true;
+            const flag = (typeof f.flag === 'string' && f.flag) || RM_BUNDLE_FLAGS[f.name];
+            const before = flag ? !!window[flag] : true;
+            try {
+                const el = document.createElement('script');
+                el.type = 'text/javascript';
+                el.text = f.code + '\n//# sourceURL=rmediahub/' + f.name;
+                (document.head || document.documentElement).appendChild(el);
+                if (el.parentNode) el.parentNode.removeChild(el);
+            } catch (e) {
+                console.log('RMedia', 'не удалось запустить плагин', f.name, e && e.message);
+            }
+            if (flag && !before && window[flag]) rmBundleStat.started++;
+        });
+    }
+
+    function rmBundleRead() {
+        try {
+            const version = localStorage.getItem(RM_BUNDLE_VER_KEY);
+            const raw = localStorage.getItem(RM_BUNDLE_DATA_KEY);
+            if (!version || !raw) return null;
+            const files = JSON.parse(raw);
+            return Array.isArray(files) ? { version: version, files: files } : null;
+        } catch (e) { return null; }
+    }
+
+    function rmBundleDrop() {
+        try { localStorage.removeItem(RM_BUNDLE_DATA_KEY); } catch (e) {}
+        try { localStorage.removeItem(RM_BUNDLE_VER_KEY); } catch (e) {}
+    }
+
+    // Память устройства общая с самой Лампой (её настройки, история просмотра).
+    // Копию держим, только если после неё остаётся запас: пробуем записать ещё
+    // ~300 тысяч знаков. Не влезло — на этом устройстве работаем без копии.
+    // (На Apple TV без такой проверки Лампа переставала сохранять свои данные.)
+    function rmBundleRoomy() {
+        const probe = 'rmedia_bundle_probe';
+        try {
+            localStorage.setItem(probe, new Array(300001).join('x'));
+            localStorage.removeItem(probe);
+            return true;
+        } catch (e) {
+            try { localStorage.removeItem(probe); } catch (e2) {}
+            return false;
+        }
+    }
+
+    function rmBundleSave(version, files) {
+        if (!rmBundleCacheAllowed()) return false;
+        try {
+            localStorage.setItem(RM_BUNDLE_DATA_KEY, JSON.stringify(files));
+            localStorage.setItem(RM_BUNDLE_VER_KEY, version);
+        } catch (e) {
+            rmBundleNoCache();
+            return false;
+        }
+        if (!rmBundleRoomy()) { rmBundleNoCache(); return false; }
+        return true;
+    }
+
+    function rmBundleSync() {
+        let next = RM_BUNDLE_SYNC_MS;
+        function again() { setTimeout(rmBundleSync, next); }
+        if (rmBundleBusy) { again(); return; }
+        let id = '', key = '', url = '', device = null;
+        try {
+            id = remoteClientId();
+            key = remoteClientKey();
+            url = remoteApi() + '/v1/client/heartbeat?_=' + Date.now();
+            device = detectDeviceInfo();
+        } catch (e) {}
+        // Устройство ещё не активировано: ждём, пока клиент введёт код.
+        if (!id || !key || !url || !device) { next = RM_BUNDLE_RETRY_MS; again(); return; }
+        rmBundleBusy = true;
+        fetch(url, {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+                id: id,
+                key: key,
+                want: 'plugins',
+                have: rmBundleVersion,
+                install_id: device.install_id,
+                device_name: device.device_name,
+                platform: device.platform,
+                user_agent: device.user_agent
+            })
+        }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        }).then(function (data) {
+            const p = data && data.plugins;
+            if (!p) { rmBundleStat.answer = 'плагины не раздаёт'; return; }
+            if (!p.ok || !p.version) { rmBundleStat.answer = 'плагины ещё не готовы'; return; }
+            if (p.unchanged) { rmBundleStat.answer = 'копия свежая'; return; }
+            if (!Array.isArray(p.files)) return;
+            const files = p.files.filter(function (f) { return f && f.name !== 'lock.js' && typeof f.code === 'string'; });
+            const saved = rmBundleSave(p.version, files);
+            rmBundleVersion = saved ? p.version : '';
+            rmBundleStat.fetched = files.length;
+            rmBundleStat.answer = 'прислал версию ' + p.version;
+            // То, что в этом сеансе ещё не запускалось (первый запуск, смена тарифа), включаем сразу.
+            rmBundleRun(files);
+        }).catch(function () {
+            rmBundleStat.answer = 'нет связи';
+            next = RM_BUNDLE_RETRY_MS * 4;
+        }).then(function () {
+            rmBundleBusy = false;
+            again();
+        });
+    }
+
+    function rmBundleInit() {
+        if (window.rmedia_bundle_sync_started) return;
+        window.rmedia_bundle_sync_started = true;
+        const cached = rmBundleRead();
+        if (cached) {
+            rmBundleVersion = cached.version;
+            rmBundleStat.cached = cached.files.length;
+            rmBundleRun(cached.files);
+            // Копия лежит там, где её держать нельзя или Лампе из-за неё тесно, — убираем
+            // (плагины этого сеанса уже запущены).
+            if (!rmBundleCacheAllowed()) { rmBundleDrop(); rmBundleVersion = ''; }
+            else if (!rmBundleRoomy()) { rmBundleNoCache(); rmBundleVersion = ''; }
+        }
+        rmBundleSync();
+    }
+    // ===== /СВОИ ПЛАГИНЫ С СЕРВЕРА =====
+
+
+    function init() {
+        installBackCrashGuard();
+        rmForceInternalTorrClient();
+        clearLocalPins();
+        installIphoneCardLayout();
+        addAdminSettings();
+        addClientMenuSettings();
+        guardConsoleController();
+        installSettingsGuards();
+        bindSafePlayerButton();
+        hideKinoPubMenu();
+        hideClientHeadExtras();
+        initRemoteControl();
+        rmBundleInit();
+        addClientSyncMenu();
+        addClientSyncHead();
+        addClientPlayerHead();
+        bindTvAdminShortcut();
+        watchSettings();
+        hideRestrictedUI();
+        bindSecretGesture();
+        bindSafePlayerButton();
+        protectAdminClicks();
+        bindMobileSettingsBackFix();
+        rmtvInit();
+
+        setTimeout(bindExtensionsGate, 300);
+        setTimeout(bindExtensionsGate, 1000);
+
+        setTimeout(bindProtectedComponentsGate, 300);
+        setTimeout(bindProtectedComponentsGate, 1000);
+
+        setInterval(function () {
+            addClientSyncMenu();
+            addClientSyncHead();
+            hideRestrictedUI();
+            hideClientHeadExtras();
+            hideKinoPubMenu();
+            rmtvMenu();
+            rmvodMenu();
+            rmTvOnlyTick();
+            installSettingsGuards();
+
+            if (!extensionGateBound || $('.settings__body').length) {
+                bindExtensionsGate();
+            }
+
+            if ($('body').hasClass('settings--open') || $('.settings__body').length) {
+                bindProtectedComponentsGate();
+            }
+        }, 1000);
+
+        console.log('[RMEDIA Lock 2026-11-18 VOD + TV-only + PIN v2 + fail-closed activation] Ready');
+    }
+
+    if (window.appready) {
+        init();
+    } else if (window.Lampa && Lampa.Listener && Lampa.Listener.follow) {
+        Lampa.Listener.follow('app', function (e) {
+            if (e.type === 'ready') init();
+        });
+    } else {
+        document.addEventListener('DOMContentLoaded', init, { once: true });
+    }
+})();
